@@ -110,27 +110,32 @@ and deploy with `hs project upload` + a reinstall.
 
 ### The subscriptions this service expects
 
-The service parses the **classic v3 webhook payload** (`subscriptionType` like
-`contact.propertyChange`, with `propertyName`/`propertyValue`/`occurredAt`/`changeSource`/
-`objectId` — see `Models.cs::WebhookEvent`). Configure subscriptions so they emit that shape
-(the `legacyCrmObjects` block), and subscribe to exactly the HubSpot-owned fields the mirror
-consumes (§3):
+We use the **new generic `crmObjects`** subscription format (consistent with the projects
+platform; the `legacyCrmObjects` block is the deprecated path). Subscribe to exactly the
+HubSpot-owned fields the mirror consumes (§3):
 
-| Subscription | Why |
+| Subscription (`objectType` · `subscriptionType` · `propertyName`) | Why |
 |---|---|
-| `contact.creation` | new contacts created in HubSpot |
-| `contact.propertyChange` · `lifecyclestage` | funnel progression |
-| `contact.propertyChange` · `hs_lead_status` | qualification status |
-| `contact.propertyChange` · `hubspot_owner_id` | rep ownership |
-| `deal.creation` | deals created in HubSpot |
-| `deal.propertyChange` · `dealstage` | top-of-funnel stage moves |
-| `deal.propertyChange` · `hubspot_owner_id` | rep ownership |
+| `contact` · `object.creation` | new contacts created in HubSpot |
+| `contact` · `object.propertyChange` · `lifecyclestage` | funnel progression |
+| `contact` · `object.propertyChange` · `hs_lead_status` | qualification status |
+| `contact` · `object.propertyChange` · `hubspot_owner_id` | rep ownership |
+| `deal` · `object.creation` | deals created in HubSpot |
+| `deal` · `object.propertyChange` · `dealstage` | top-of-funnel stage moves |
+| `deal` · `object.propertyChange` · `hubspot_owner_id` | rep ownership |
 
-> ⚠️ **Payload-shape gotcha.** The newer `crmObjects` subscription block emits
-> `subscriptionType: "object.propertyChange"` with a separate `objectType` — which our
-> `WebhookEvent` model does **not** parse. Keep subscriptions in the `legacyCrmObjects` block
-> (classic `contact.*` / `deal.*` types) so the payload matches the code, **or** extend the
-> model/processor first. Verify the real payload against the sandbox before flipping to prod.
+**Payload shapes — the service handles both.** The generic payload sends
+`subscriptionType: "object.propertyChange"` plus an `objectTypeId` (`0-1` contact, `0-3` deal);
+the legacy payload encodes the type in `subscriptionType` (`deal.propertyChange`).
+`Models.cs::WebhookEvent` + `InboundEventProcessor.ResolveObjectType` parse either, so you can
+switch subscription formats without touching code. Mapping lives in `ResolveObjectType` — add
+an `objectTypeId` there if you ever subscribe to another object (e.g. company `0-2`).
+
+> ⚠️ **Validate before upload.** Webhook hsmeta field names are platform-version-specific. The
+> CLI scaffold for this project's `platformVersion` (2026.03) uses `objectType` inside
+> `crmObjects` (some HubSpot docs show `objectName` for other versions). Run
+> **`hs project validate`** before `hs project upload`, and confirm the real delivered payload
+> against the sandbox before flipping to prod.
 
 ### The steps to change a subscription
 
@@ -192,5 +197,12 @@ These three items from the README roadmap / plan are now implemented:
   contact's associated deals and reuses an open one (`ClosedDealStages` decides "open") instead
   of always creating a duplicate. *Config: §2 `ClosedDealStages`.*
 
+- **Webhook payload: new generic `crmObjects` format.** Subscriptions moved to the generic
+  format and `InboundEventProcessor.ResolveObjectType` now resolves the object from `objectTypeId`
+  (`0-1`/`0-3`), falling back to the legacy `subscriptionType`. Both shapes are accepted. *Config: §4.*
+
 Still open / not built: Pulse handoff (phase 5), anonymous→known stitching (§11 Q5),
 retargeting mechanism (§11 Q1), and DB-backed stores. See README roadmap.
+
+For a runnable, end-to-end local walkthrough (organic + Bayut + anonymous + webhook, with
+expected output), see `local-testing.md`.

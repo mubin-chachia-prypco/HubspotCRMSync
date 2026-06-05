@@ -115,10 +115,12 @@ sequenceDiagram
     end
 
     Note over W,HS: Resolve the INQUIRY
-    W->>HS: Search deal by portal_lead_id
+    W->>HS: Find deal by opportunity_id (stored id first, else search)
     alt deal exists
         W->>HS: Update deal
-    else no deal yet
+    else no deal, but contact has an open deal
+        W->>HS: Reuse open deal (via v4 associations)
+    else genuinely new
         W->>HS: Create deal
     end
 
@@ -229,8 +231,9 @@ flowchart TD
 ### Notes
 
 - Diagrams 1–2 are the **concepts**, 3–5 the **build**, 6–7 the **multi-system picture**.
-- The outbound flow (4) is what our PoC app already exercises.
-- The inbound flow (5) is still to build — now lighter (funnel/engagement, not application detail).
+- The outbound flow (4) is what our PoC app exercises, incl. open-deal reuse via associations.
+- The inbound flow (5) is built (lighter — funnel/engagement, not application detail): the
+  webhook processor + reconciliation sweep update the local mirror for HubSpot-owned fields.
 - Per the 2026-06-04 call: HubSpot is **top-of-funnel only**; **PRYPCO Pulse** is the
   processing system of record. No Offer/Product objects in HubSpot; the offer is a
   human-readable attribute. The HubSpot deal pipeline is top-of-funnel + a coarse outcome.

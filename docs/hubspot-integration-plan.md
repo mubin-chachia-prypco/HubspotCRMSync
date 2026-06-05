@@ -207,9 +207,12 @@ When an anonymous session becomes identified (login or email):
 
 ### Editing the right deal
 Always **update by the stored HubSpot deal id**, persisted on our opportunity record (keyed by
-`opportunity_id`, linked to the user account once known). A scoped search (this contact + open
-stage) is a **fallback only** when no stored id exists — never the hot path (this avoids the
-search-index-lag duplicate risk).
+`opportunity_id`, linked to the user account once known). When no stored id exists (e.g. after a
+restart, or an organic lead with no customer id), fall back in order: search by `opportunity_id`,
+then ask HubSpot for the contact's associated deals (v4 associations + a batch read of
+`dealstage`) and reuse an **open** one. The rate-limited Search endpoint is never the hot path —
+the associations GET + batch read avoid the search-index-lag duplicate risk. "Open" is defined by
+`HubSpot:ClosedDealStages` config (see `hubspot-config-and-operations.md` §2).
 
 ### Worked examples
 - **Sara (Bayut):** arrives with a partner ref → backend mints `opportunity_id`, stores
@@ -292,7 +295,11 @@ worked example. Running cast: Sara (Bayut), Omar (organic/authenticated), Layla 
 
 > The PoC app now demonstrates phases 1–4 (outbound, outbox + worker, inbound webhooks with
 > signature validation, reconciliation) plus the organic/anonymous identity logic — at PoC
-> level (in-memory stores, sandbox). Phases 5–6 and the open decisions remain.
+> level (in-memory stores, sandbox). It also covers the "B-series" hardening: deal-stage name→id
+> mapping, the inbound mirror actually updating local records for HubSpot-owned fields, and
+> open-deal reuse via HubSpot associations. Webhooks use the new generic `crmObjects` format
+> (the receiver parses both that and the legacy shape). Config knobs + webhook update steps are
+> in `hubspot-config-and-operations.md`. Phases 5–6 and the open decisions remain.
 
 - **Phase 0 — Setup & decisions.** Resolve §11; complete §10. *Done when: sandbox ready, decisions signed off.*
 - **Phase 1 — Outbound MVP.** Contact + Deal, associate, dedup (partner + organic). *Done when: a lead → one contact + one deal.* (PoC app covers the basics; we grow it from here.)

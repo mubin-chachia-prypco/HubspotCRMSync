@@ -6,7 +6,8 @@
 > productionised next (e.g. picked up in Claude Code). See the roadmap below and the
 > design docs in [`docs/`](docs/): `hubspot-integration-plan.md` (what/why + open decisions),
 > `hubspot-concepts-and-architecture.md` (diagrams), `hubspot-app-and-auth-setup.md` (app/token),
-> and `hubspot-config-and-operations.md` (**every config knob + how to change webhooks**).
+> `hubspot-config-and-operations.md` (**every config knob + how to change webhooks**), and
+> `local-testing.md` (**runnable worked examples** — organic + Bayut + anonymous + webhook).
 
 ## What it does
 
@@ -143,18 +144,20 @@ HubSpot posts an array of events plus the `X-HubSpot-Signature-v3` and
 `X-HubSpot-Request-Timestamp` headers. The receiver validates the v3 signature, acks fast,
 and processes asynchronously (idempotent + echo-suppressed).
 
-Sample body HubSpot sends:
+Sample body HubSpot sends (new generic `crmObjects` shape — `objectTypeId` `0-1`=contact,
+`0-3`=deal). The receiver also accepts the legacy shape (`subscriptionType:"contact.propertyChange"`,
+no `objectTypeId`); see `InboundEventProcessor.ResolveObjectType`:
 ```json
 [
   {
     "eventId": 1234567890,
-    "subscriptionType": "contact.propertyChange",
+    "subscriptionType": "object.propertyChange",
+    "objectTypeId": "0-1",
     "objectId": 123456789,
     "propertyName": "lifecyclestage",
     "propertyValue": "salesqualifiedlead",
     "occurredAt": 1733400000000,
-    "changeSource": "CRM_UI",
-    "sourceId": "userId:5551234"
+    "changeSource": "CRM"
   }
 ]
 ```
@@ -168,7 +171,7 @@ Sample body HubSpot sends:
 SECRET=testsecret                       # must equal HUBSPOT_CLIENT_SECRET
 URI='http://localhost:5080/webhooks/hubspot'
 TS=$(date +%s)000
-BODY='[{"eventId":1,"subscriptionType":"contact.propertyChange","objectId":123,"occurredAt":'$TS',"changeSource":"CRM_UI"}]'
+BODY='[{"eventId":1,"subscriptionType":"object.propertyChange","objectTypeId":"0-1","objectId":123,"propertyName":"lifecyclestage","propertyValue":"salesqualifiedlead","occurredAt":'$TS',"changeSource":"CRM"}]'
 SIG=$(printf '%s' "POST${URI}${BODY}${TS}" | openssl dgst -sha256 -hmac "$SECRET" -binary | base64)
 curl -X POST "$URI" -H 'Content-Type: application/json' \
   -H "X-HubSpot-Request-Timestamp: $TS" -H "X-HubSpot-Signature-v3: $SIG" -d "$BODY"

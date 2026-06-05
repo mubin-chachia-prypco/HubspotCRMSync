@@ -68,11 +68,17 @@ public sealed class OutboxMessage
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
-/// <summary>A single HubSpot webhook event (events arrive as a JSON array of these).</summary>
+/// <summary>
+/// A single HubSpot webhook event (events arrive as a JSON array of these). Handles both the
+/// legacy payload (subscriptionType like "deal.propertyChange") and the new generic/crmObjects
+/// payload (subscriptionType "object.propertyChange" + an <see cref="ObjectTypeId"/> like "0-3").
+/// </summary>
 public sealed class WebhookEvent
 {
     [JsonPropertyName("eventId")] public long EventId { get; set; }
     [JsonPropertyName("subscriptionType")] public string SubscriptionType { get; set; } = "";
+    /// <summary>HubSpot raw object-type id (generic payloads only): 0-1 contact, 0-3 deal, 0-2 company.</summary>
+    [JsonPropertyName("objectTypeId")] public string? ObjectTypeId { get; set; }
     [JsonPropertyName("objectId")] public long ObjectId { get; set; }
     [JsonPropertyName("propertyName")] public string? PropertyName { get; set; }
     [JsonPropertyName("propertyValue")] public string? PropertyValue { get; set; }

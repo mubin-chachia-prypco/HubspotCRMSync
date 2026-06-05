@@ -19,7 +19,7 @@ public sealed class InboundEventProcessor(IProcessedEvents processed, IEchoGuard
             if (!processed.TryMarkProcessed(e.EventId))
                 continue; // already handled
 
-            var objectType = e.SubscriptionType.StartsWith("deal", StringComparison.OrdinalIgnoreCase) ? "deals" : "contacts";
+            var objectType = ResolveObjectType(e);
 
             if (string.Equals(e.ChangeSource, "INTEGRATION", StringComparison.OrdinalIgnoreCase)
                 || echo.WasWrittenByUsRecently(objectType, e.ObjectId.ToString()))
@@ -35,5 +35,17 @@ public sealed class InboundEventProcessor(IProcessedEvents processed, IEchoGuard
             mirror.ApplyChange(objectType, e.ObjectId.ToString(), e.PropertyName, e.PropertyValue, occurredAt);
         }
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Resolve our object type ("deals"/"contacts") from either payload shape: the new generic
+    /// (crmObjects) payload carries <c>objectTypeId</c> (0-3 deal, 0-1 contact); the legacy payload
+    /// encodes the type in <c>subscriptionType</c> ("deal.*" / "contact.*").
+    /// </summary>
+    private static string ResolveObjectType(WebhookEvent e)
+    {
+        if (!string.IsNullOrEmpty(e.ObjectTypeId))
+            return e.ObjectTypeId == "0-3" ? "deals" : "contacts";
+        return e.SubscriptionType.StartsWith("deal", StringComparison.OrdinalIgnoreCase) ? "deals" : "contacts";
     }
 }
