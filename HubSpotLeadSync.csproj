@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>HubSpotLeadSync</RootNamespace>
+    <AssemblyName>hubspot-lead-sync</AssemblyName>
+  </PropertyGroup>
+
+  <!-- No external NuGet packages: only the .NET 8 + ASP.NET Core shared
+       frameworks. Easy to drop into a solution; nothing extra to keep patched. -->
+
+</Project>
