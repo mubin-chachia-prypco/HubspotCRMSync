@@ -4,7 +4,9 @@
 > for the B2C mortgage flow against a sandbox. It is intentionally light: state is
 > in-memory, there's no database, and external calls target a sandbox. It's built to be
 > productionised next (e.g. picked up in Claude Code). See the roadmap below and the
-> design docs in [`docs/`](docs/) (`hubspot-integration-plan.md`, `hubspot-concepts-and-architecture.md`).
+> design docs in [`docs/`](docs/): `hubspot-integration-plan.md` (what/why + open decisions),
+> `hubspot-concepts-and-architecture.md` (diagrams), `hubspot-app-and-auth-setup.md` (app/token),
+> and `hubspot-config-and-operations.md` (**every config knob + how to change webhooks**).
 
 ## What it does
 
@@ -201,17 +203,20 @@ Sync/ReconciliationWorker.cs     scheduled changed-since sweep
 - [x] Outbox + background worker (retry/back-off)
 - [x] Inbound webhooks + v3 signature validation (idempotency + echo-suppression)
 - [x] Reconciliation sweep (scheduled changed-since)
+- [x] **Deal-stage mapping** (portal stage name → HubSpot internal id; see config doc §2)
+- [x] **Inbound mirror** — webhook + reconcile now update the local record for HubSpot-owned fields
+- [x] Find-open-deal-for-contact via HubSpot **associations** (was local-store only)
 - [ ] **Pulse handoff** + coarse status back (model is ready; integration not built)
 - [ ] Anonymous → known **stitching** rule (decision open — see plan §11)
-- [ ] Find-open-deal-for-contact via HubSpot **associations** (currently uses the local store)
 
 ## Seams to replace when productionising
 
 - **In-memory stores → a real DB.** `IOpportunityStore`, `IOutbox`, `IProcessedEvents`,
   `IEchoGuard` are interfaces with in-memory impls; swap for DB-backed ones. The outbox row
   and the lead row should be written in one transaction.
-- **Inbound processing & reconciliation currently log** the change; wire them to update the
-  local mirror for HubSpot-owned fields.
+- **In-memory mirror → DB.** Inbound webhooks + reconciliation now update the local
+  opportunity record for HubSpot-owned fields (`Sync/LocalMirror.cs`); persist that mirror in
+  the same DB as the opportunity store when productionising.
 - **Pulse handoff** isn't implemented — `OpportunityState` and the ownership notes mark where it goes.
 - **Retargeting** (offers) is captured as snapshot properties on the deal; live offers are a
   send-time concern for our own system (see plan §4), not modelled here.

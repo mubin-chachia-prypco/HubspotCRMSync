@@ -11,6 +11,18 @@ public sealed class HubSpotOptions
     public string AccessToken { get; set; } = "";
     public string ClientSecret { get; set; } = "";   // app secret, for webhook v3 signature validation
     public string BaseUrl { get; set; } = "https://api.hubapi.com";
+
+    /// <summary>
+    /// Maps our canonical/portal stage names (e.g. "qualified") to HubSpot's internal deal
+    /// stage ids. HubSpot's API wants the internal id, not the human label. Record the ids
+    /// from the sandbox pipeline (plan §10) and fill this in config. Unmapped values pass
+    /// through unchanged (with a warning), so callers already sending internal ids still work.
+    /// </summary>
+    public Dictionary<string, string> DealStages { get; set; } = new();
+
+    /// <summary>HubSpot internal stage ids that count as Closed (Won/Lost/Abandoned). Drives the
+    /// open-deal-reuse rule and the inbound mirror's Open/Closed flag. Empty = treat all as Open.</summary>
+    public List<string> ClosedDealStages { get; set; } = new();
 }
 
 /// <summary>
@@ -70,6 +82,45 @@ public sealed partial class HubSpotClient
         var path = $"/crm/v4/objects/{fromType}/{fromId}/associations/default/{toType}/{toId}";
         using var resp = await SendAsync(() => new HttpRequestMessage(HttpMethod.Put, path), ct);
         resp.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>
+    /// v4 associations: the ids of <paramref name="toType"/> records linked to a
+    /// <paramref name="fromType"/> record. Direct GET (not the rate-limited Search endpoint),
+    /// so it's safe to use to find a contact's existing deals.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> GetAssociatedIdsAsync(string fromType, string fromId, string toType, CancellationToken ct)
+    {
+        var path = $"/crm/v4/objects/{fromType}/{fromId}/associations/{toType}";
+        using var resp = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, path), ct);
+        resp.EnsureSuccessStatusCode();
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+        var ids = new List<string>();
+        foreach (var r in doc.RootElement.GetProperty("results").EnumerateArray())
+            ids.Add(r.GetProperty("toObjectId").GetInt64().ToString());
+        return ids;
+    }
+
+    /// <summary>Batch-read selected properties for a set of object ids (max 100/req).</summary>
+    public async Task<IReadOnlyList<(string Id, IReadOnlyDictionary<string, string?> Props)>> BatchReadAsync(
+        string objectType, IReadOnlyList<string> ids, IReadOnlyList<string> properties, CancellationToken ct)
+    {
+        if (ids.Count == 0) return [];
+        var body = new { properties, inputs = ids.Select(id => new { id }).ToArray() };
+        using var resp = await SendAsync(() => Json(HttpMethod.Post, $"/crm/v3/objects/{objectType}/batch/read", body), ct);
+        resp.EnsureSuccessStatusCode();
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+        var list = new List<(string, IReadOnlyDictionary<string, string?>)>();
+        foreach (var r in doc.RootElement.GetProperty("results").EnumerateArray())
+        {
+            var id = r.GetProperty("id").GetString()!;
+            var props = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            if (r.TryGetProperty("properties", out var p))
+                foreach (var prop in p.EnumerateObject())
+                    props[prop.Name] = prop.Value.ValueKind == JsonValueKind.Null ? null : prop.Value.GetString();
+            list.Add((id, props));
+        }
+        return list;
     }
 
     /// <summary>Reconciliation seam: ids changed since a unix-ms timestamp.</summary>

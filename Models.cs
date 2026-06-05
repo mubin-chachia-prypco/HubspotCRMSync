@@ -90,4 +90,12 @@ public sealed class OpportunityRecord
     public string? HubSpotDealId { get; set; }
     public OpportunityState State { get; set; } = OpportunityState.Open;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    // --- HubSpot-owned mirror (top-of-funnel / qualification; HubSpot -> us only) ---
+    public string? LifecycleStage { get; set; }   // contact: lifecyclestage
+    public string? LeadStatus { get; set; }        // contact: hs_lead_status
+    public string? DealStage { get; set; }         // deal: dealstage (HubSpot internal id)
+    public string? OwnerId { get; set; }           // hubspot_owner_id
+    /// <summary>occurredAt/lastmodified of the newest HubSpot change we mirrored — used to drop stale events.</summary>
+    public DateTimeOffset? LastHubSpotChangeAt { get; set; }
 }

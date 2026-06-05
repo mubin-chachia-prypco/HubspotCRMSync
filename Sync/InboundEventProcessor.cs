@@ -8,7 +8,7 @@ namespace HubSpotLeadSync;
 ///   - Ownership: HubSpot owns top-of-funnel / qualification, so we apply those to our copy.
 ///     Application/processing data is owned by Pulse and ignored here.
 /// </summary>
-public sealed class InboundEventProcessor(IProcessedEvents processed, IEchoGuard echo, ILogger<InboundEventProcessor> log)
+public sealed class InboundEventProcessor(IProcessedEvents processed, IEchoGuard echo, LocalMirror mirror, ILogger<InboundEventProcessor> log)
 {
     public Task ProcessAsync(IEnumerable<WebhookEvent> events, CancellationToken ct = default)
     {
@@ -28,10 +28,11 @@ public sealed class InboundEventProcessor(IProcessedEvents processed, IEchoGuard
                 continue;
             }
 
-            // PoC: log the genuine external change. A real impl updates the local mirror for
-            // HubSpot-owned fields and ignores anything owned by Pulse.
-            log.LogInformation("Applying HubSpot change: {Sub} {Id} {Prop}={Val} (source={Src})",
-                e.SubscriptionType, e.ObjectId, e.PropertyName, e.PropertyValue, e.ChangeSource);
+            // Apply the change to our local mirror. LocalMirror enforces the ownership rule
+            // (only HubSpot-owned top-of-funnel fields are mirrored; Pulse-owned data is ignored)
+            // and the last-writer rule (stale events are dropped).
+            var occurredAt = DateTimeOffset.FromUnixTimeMilliseconds(e.OccurredAt);
+            mirror.ApplyChange(objectType, e.ObjectId.ToString(), e.PropertyName, e.PropertyValue, occurredAt);
         }
         return Task.CompletedTask;
     }

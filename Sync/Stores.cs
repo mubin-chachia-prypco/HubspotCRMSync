@@ -7,6 +7,8 @@ public interface IOpportunityStore
 {
     OpportunityRecord? GetByOpportunityId(string opportunityId);
     OpportunityRecord? GetOpenForCustomer(string customerId);
+    OpportunityRecord? GetByHubSpotContactId(string contactId);
+    OpportunityRecord? GetByHubSpotDealId(string dealId);
     void Save(OpportunityRecord record);
 }
 
@@ -19,6 +21,12 @@ public sealed class InMemoryOpportunityStore : IOpportunityStore
 
     public OpportunityRecord? GetOpenForCustomer(string customerId) =>
         _byId.Values.FirstOrDefault(r => r.CustomerId == customerId && r.State == OpportunityState.Open);
+
+    public OpportunityRecord? GetByHubSpotContactId(string contactId) =>
+        _byId.Values.FirstOrDefault(r => r.HubSpotContactId == contactId);
+
+    public OpportunityRecord? GetByHubSpotDealId(string dealId) =>
+        _byId.Values.FirstOrDefault(r => r.HubSpotDealId == dealId);
 
     public void Save(OpportunityRecord record)
     {

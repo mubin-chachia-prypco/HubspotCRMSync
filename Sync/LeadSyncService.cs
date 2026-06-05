@@ -11,7 +11,7 @@ namespace HubSpotLeadSync;
 ///
 /// Anonymous + unidentifiable leads are held locally (no junk HubSpot contact created).
 /// </summary>
-public sealed class LeadSyncService(HubSpotClient hs, IOpportunityStore store, IEchoGuard echo)
+public sealed class LeadSyncService(HubSpotClient hs, IOpportunityStore store, IEchoGuard echo, DealStageMap stages, ILogger<LeadSyncService> log)
 {
     public const string OpportunityIdProp = "opportunity_id";    // unique on Deal — the dedup anchor
     public const string CustomerIdProp = "portal_customer_id";   // unique on Contact (if available)
@@ -31,7 +31,7 @@ public sealed class LeadSyncService(HubSpotClient hs, IOpportunityStore store, I
         }
 
         // 2) Resolve the opportunity (reuse open deal vs create new).
-        var dealId = await ResolveDealAsync(req, result, ct);
+        var dealId = await ResolveDealAsync(req, contactId, result, ct);
 
         // 3) Link them (idempotent).
         await hs.AssociateDefaultAsync("contacts", contactId, "deals", dealId, ct);
@@ -86,7 +86,7 @@ public sealed class LeadSyncService(HubSpotClient hs, IOpportunityStore store, I
         }
     }
 
-    private async Task<string> ResolveDealAsync(LeadSyncRequest req, LeadSyncResult result, CancellationToken ct)
+    private async Task<string> ResolveDealAsync(LeadSyncRequest req, string contactId, LeadSyncResult result, CancellationToken ct)
     {
         if (!string.IsNullOrWhiteSpace(req.HubSpotDealId))
         {
@@ -112,7 +112,7 @@ public sealed class LeadSyncService(HubSpotClient hs, IOpportunityStore store, I
             return byOpp;
         }
 
-        // Returning customer with an OPEN opportunity -> reuse that deal (don't duplicate).
+        // Returning customer with an OPEN opportunity in our local store -> reuse that deal.
         if (!string.IsNullOrWhiteSpace(req.CustomerId))
         {
             var open = store.GetOpenForCustomer(req.CustomerId!);
@@ -123,10 +123,43 @@ public sealed class LeadSyncService(HubSpotClient hs, IOpportunityStore store, I
             }
         }
 
+        // Local store had nothing (e.g. after a restart, or an organic lead with no customer id):
+        // ask HubSpot which deals this contact already has, and reuse an open one. Uses the v4
+        // associations GET + a batch read of dealstage — not the rate-limited Search endpoint.
+        var openViaHubSpot = await FindOpenDealViaAssociationsAsync(contactId, ct);
+        if (openViaHubSpot is not null)
+        {
+            await hs.UpdateAsync("deals", openViaHubSpot, DealProps(req), ct);
+            return openViaHubSpot;
+        }
+
         // Genuinely new opportunity -> create.
         var id = await hs.CreateAsync("deals", DealProps(req), ct);
         result.DealCreated = true;
         return id;
+    }
+
+    /// <summary>
+    /// Find an OPEN deal already associated with the contact in HubSpot. "Open" = a dealstage not
+    /// listed in <see cref="HubSpotOptions.ClosedDealStages"/>. If the contact has more than one
+    /// open deal we reuse the first and warn — the one-vs-many-open-deals rule is plan §11 Q6.
+    /// </summary>
+    private async Task<string?> FindOpenDealViaAssociationsAsync(string contactId, CancellationToken ct)
+    {
+        var dealIds = await hs.GetAssociatedIdsAsync("contacts", contactId, "deals", ct);
+        if (dealIds.Count == 0) return null;
+
+        var deals = await hs.BatchReadAsync("deals", dealIds, new[] { "dealstage" }, ct);
+        var open = deals
+            .Where(d => !stages.IsClosedStage(d.Props.GetValueOrDefault("dealstage")))
+            .Select(d => d.Id)
+            .ToList();
+
+        if (open.Count == 0) return null;
+        if (open.Count > 1)
+            log.LogWarning("Contact {Contact} has {Count} open deals in HubSpot; reusing {Deal}. " +
+                "Concurrency rule (plan §11 Q6) is unresolved.", contactId, open.Count, open[0]);
+        return open[0];
     }
 
     private static Dictionary<string, string> ContactProps(LeadSyncRequest req)
@@ -142,11 +175,11 @@ public sealed class LeadSyncService(HubSpotClient hs, IOpportunityStore store, I
         return p;
     }
 
-    private static Dictionary<string, string> DealProps(LeadSyncRequest req)
+    private Dictionary<string, string> DealProps(LeadSyncRequest req)
     {
         var p = new Dictionary<string, string> { [OpportunityIdProp] = req.OpportunityId! };
         Add(p, "dealname", req.DealName ?? $"Mortgage {req.OpportunityId}");
-        Add(p, "dealstage", req.PipelineStage);
+        Add(p, "dealstage", stages.ToInternalStageId(req.PipelineStage));   // canonical name -> HubSpot internal id
         Add(p, "partner_lead_ref", req.PartnerLeadRef);
         Add(p, "lead_source", req.Source.ToString());
         Add(p, "dropped_at", req.DroppedAt);

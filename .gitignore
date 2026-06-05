@@ -1,0 +1,18 @@
+# .NET build output
+bin/
+obj/
+
+# Rider / VS
+.idea/
+.vs/
+*.user
+
+# HubSpot CLI config — holds the personal access key; never commit
+hubspot.config.yml
+
+# Secrets (belong in a secret store, never in source)
+appsettings.*.local.json
+
+# macOS
+.DS_Store
+**/.DS_Store

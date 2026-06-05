@@ -21,6 +21,8 @@ builder.Services.AddSingleton<IOutbox, InMemoryOutbox>();
 builder.Services.AddSingleton<IProcessedEvents, InMemoryProcessedEvents>();
 builder.Services.AddSingleton<IEchoGuard, InMemoryEchoGuard>();
 builder.Services.AddSingleton<WebhookSignatureValidator>();
+builder.Services.AddSingleton<DealStageMap>();
+builder.Services.AddSingleton<LocalMirror>();
 builder.Services.AddSingleton<InboundEventProcessor>();
 builder.Services.AddScoped<LeadSyncService>();
 builder.Services.AddHostedService<OutboxWorker>();
