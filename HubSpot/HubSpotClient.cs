@@ -11,6 +11,7 @@ public sealed class HubSpotOptions
     public string AccessToken { get; set; } = "";
     public string ClientSecret { get; set; } = "";   // app secret, for webhook v3 signature validation
     public string BaseUrl { get; set; } = "https://api.hubapi.com";
+    public string ApplicationObjectTypeId { get; set; } = "";
 
     /// <summary>
     /// Maps our canonical/portal stage names (e.g. "qualified") to HubSpot's internal deal
@@ -129,6 +130,26 @@ public sealed partial class HubSpotClient
             list.Add((id, props));
         }
         return list;
+    }
+
+    /// <summary>Fetch a single object record with all its properties.</summary>
+    public async Task<(string Id, IReadOnlyDictionary<string, string?> Props)?> GetObjectAsync(string objectType, string id, CancellationToken ct)
+    {
+        using var resp = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get,
+            $"/crm/v3/objects/{objectType}/{id}?allProperties=true"), ct);
+        if (resp.StatusCode == HttpStatusCode.NotFound) return null;
+        if (!resp.IsSuccessStatusCode)
+        {
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            throw new HttpRequestException($"HubSpot GET {objectType}/{id} failed {(int)resp.StatusCode}: {body}");
+        }
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+        var recordId = doc.RootElement.GetProperty("id").GetString()!;
+        var props = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        if (doc.RootElement.TryGetProperty("properties", out var p))
+            foreach (var prop in p.EnumerateObject())
+                props[prop.Name] = prop.Value.ValueKind == JsonValueKind.Null ? null : prop.Value.GetString();
+        return (recordId, props);
     }
 
     /// <summary>Reconciliation seam: ids changed since a unix-ms timestamp.</summary>

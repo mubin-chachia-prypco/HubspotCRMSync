@@ -11,6 +11,7 @@ obj/
 hubspot.config.yml
 
 # Secrets (belong in a secret store, never in source)
+appsettings.json
 appsettings.*.local.json
 
 # macOS

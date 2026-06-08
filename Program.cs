@@ -42,6 +42,37 @@ app.MapPost("/leads", (LeadSyncRequest req, IOutbox outbox) =>
     return Results.Accepted($"/opportunities/{req.OpportunityId}", new { req.OpportunityId, queued = true });
 });
 
+// --- Query: deal + all associated applications ---
+app.MapGet("/deals/{opportunityId}", async (string opportunityId, IOpportunityStore store, HubSpotClient hs, HubSpotOptions opts, CancellationToken ct) =>
+{
+    // Resolve HubSpot deal id from local store, fall back to HubSpot search.
+    var rec = store.GetByOpportunityId(opportunityId);
+    var dealHsId = rec?.HubSpotDealId
+        ?? await hs.FindIdByPropertyAsync("deals", LeadSyncService.OpportunityIdProp, opportunityId, ct);
+
+    if (dealHsId is null) return Results.NotFound(new { error = $"No deal found for opportunityId {opportunityId}" });
+
+    // Fetch deal and applications in parallel.
+    var dealTask = hs.GetObjectAsync("deals", dealHsId, ct);
+    var appIdsTask = hs.GetAssociatedIdsAsync("deals", dealHsId, opts.ApplicationObjectTypeId, ct);
+    await Task.WhenAll(dealTask, appIdsTask);
+
+    var deal = await dealTask;
+    var appIds = await appIdsTask;
+
+    // Fetch all application records with all properties.
+    var applications = await Task.WhenAll(appIds.Select(id => hs.GetObjectAsync(opts.ApplicationObjectTypeId, id, ct)));
+
+    return Results.Ok(new
+    {
+        opportunityId,
+        deal = new { id = deal!.Value.Id, properties = deal.Value.Props },
+        applications = applications
+            .Where(a => a is not null)
+            .Select(a => new { id = a!.Value.Id, properties = a.Value.Props })
+    });
+});
+
 // --- Inbound: HubSpot webhooks. Validate signature, ack fast, process out of band. ---
 app.MapPost("/webhooks/hubspot", async (HttpRequest http, WebhookSignatureValidator validator, InboundEventProcessor processor) =>
 {
