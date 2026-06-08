@@ -32,8 +32,9 @@ double-underscore env vars (`HubSpot__BaseUrl=…`) in containers.
     "AccessToken":  "…or HUBSPOT_TOKEN env var (preferred)",
     "ClientSecret": "…or HUBSPOT_CLIENT_SECRET env var (preferred)",
     "BaseUrl":      "https://api.hubapi.com",
-    "DealStages":        { },   // canonical stage name -> HubSpot internal stage id
-    "ClosedDealStages":  [ ]    // HubSpot internal stage ids that count as Closed
+    "DealStages":              { },          // canonical stage name -> HubSpot internal stage id
+    "ClosedDealStages":        [ ],          // HubSpot internal stage ids that count as Closed
+    "ApplicationObjectTypeId": "2-xxxxxxx"  // HubSpot custom object type id for Applications
   }
 }
 ```
@@ -214,7 +215,50 @@ The **internal name** must match exactly — the label is just display text.
 
 ---
 
-## 6. Per-environment summary (what differs sandbox → prod)
+## 6. Applications custom object
+
+The service supports a one-deal-to-many-applications relationship via a HubSpot custom object.
+
+### Setup (one-time, per HubSpot account)
+
+1. **Create the custom object** — Settings → Objects → Custom Objects → Create custom object.
+   Name it `Application` and add whatever properties you need (applicant name, status, income, etc.).
+2. **Define the association** — on the custom object, go to the Associations tab and add an
+   association to **Deal**.
+3. **Find the object type ID** — HubSpot assigns a type id like `2-203884532` (visible in the
+   URL when viewing the object's property settings: `…/properties?type=2-xxxxxxx`).
+4. **Set `ApplicationObjectTypeId` in config:**
+   ```json
+   "ApplicationObjectTypeId": "2-203884532"
+   ```
+   This value differs between sandbox and production portals — update it per environment.
+5. **Add the required scopes** to your private app — Settings → Integrations → Private Apps →
+   your app → Scopes:
+   - `crm.objects.custom.read`
+   - `crm.objects.custom.write` (needed when the service creates application records)
+
+### How the query works
+
+`GET /deals/{opportunityId}` makes two parallel HubSpot calls:
+1. Fetch the deal record with all properties (`GET /crm/v3/objects/deals/{id}?allProperties=true`)
+2. Get associated application IDs (`GET /crm/v4/objects/deals/{id}/associations/{applicationTypeId}`)
+
+Then fetches each application record individually with all its properties, and returns everything
+in a single JSON response.
+
+> **HubSpot doesn't support joins** — there is no single API call that returns a deal with its
+> applications embedded. Two round-trips is the minimum; this is a platform constraint, not a
+> service limitation.
+
+### Per-environment config
+
+| Setting | Sandbox | Production |
+|---|---|---|
+| `ApplicationObjectTypeId` | sandbox portal type id | prod portal type id (re-read from URL) |
+
+---
+
+## 7. Per-environment summary (what differs sandbox → prod)
 
 | Setting | Sandbox | Production |
 |---|---|---|
@@ -228,7 +272,7 @@ Portal IDs and account names are in `hubspot-app-and-auth-setup.md` §"Sandbox v
 
 ---
 
-## 7. What changed in the latest build (B-series fixes)
+## 8. What changed in the latest build (B-series fixes)
 
 These three items from the README roadmap / plan are now implemented:
 

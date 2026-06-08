@@ -19,6 +19,7 @@ real **sandbox** token and ensure the custom properties + pipeline exist (plan �
 | Webhook signature validation (200 / 401) + object-type resolution | No (set `HUBSPOT_CLIENT_SECRET`) |
 | Contact/Deal create/update, association, open-deal reuse | **Yes** (sandbox token) |
 | Inbound mirror actually updating a record (`Mirrored …`) | **Yes** (needs a synced record first) |
+| `GET /deals/{opportunityId}` — deal + applications | **Yes** (sandbox token + `ApplicationObjectTypeId` set in config) |
 
 ## 1. Run the app
 
@@ -242,3 +243,56 @@ Closed because `closedwon` is in `HubSpot:ClosedDealStages` (when configured).
 
 Both payload shapes are accepted: the legacy form
 (`"subscriptionType":"deal.propertyChange"`, no `objectTypeId`) resolves identically.
+
+## 4. Deal + Applications query
+
+Prerequisites:
+- A lead has been synced (contact + deal exist in HubSpot)
+- The Application custom object is set up in HubSpot and associated to the deal (see config doc §6)
+- `ApplicationObjectTypeId` is set in `appsettings.json`
+
+**Terminal / command line:**
+```bash
+curl -s http://localhost:5080/deals/OPP-YOUR-OPPORTUNITY-ID | python3 -m json.tool
+```
+
+**Postman-friendly (single line):**
+```
+GET http://localhost:5080/deals/OPP-YOUR-OPPORTUNITY-ID
+```
+No headers or body needed — it's a plain GET.
+
+**Expected response shape:**
+```json
+{
+  "opportunityId": "OPP-abc123",
+  "deal": {
+    "id": "505593219265",
+    "properties": {
+      "dealname": "Dubai Marina 2BR",
+      "opportunity_id": "OPP-abc123",
+      "partner_lead_ref": "BYT-00001",
+      "lead_source": "Bayut",
+      "amount": "1850000",
+      "customer_profile_snapshot": "{...}",
+      "hs_lastmodifieddate": "2026-06-08T10:00:00Z"
+    }
+  },
+  "applications": [
+    {
+      "id": "12345678",
+      "properties": {
+        "hs_object_id": "12345678",
+        "createdate": "2026-06-08T10:00:00Z"
+      }
+    }
+  ]
+}
+```
+
+If no deal is found for the `opportunityId`, the service returns `404` with:
+```json
+{ "error": "No deal found for opportunityId OPP-abc123" }
+```
+
+If the deal exists but has no associated applications yet, `applications` is an empty array.
