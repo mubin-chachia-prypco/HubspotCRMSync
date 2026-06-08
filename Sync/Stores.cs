@@ -6,6 +6,7 @@ namespace HubSpotLeadSync;
 public interface IOpportunityStore
 {
     OpportunityRecord? GetByOpportunityId(string opportunityId);
+    OpportunityRecord? GetByAnonymousSessionId(string sessionId);
     OpportunityRecord? GetOpenForCustomer(string customerId);
     OpportunityRecord? GetByHubSpotContactId(string contactId);
     OpportunityRecord? GetByHubSpotDealId(string dealId);
@@ -18,6 +19,9 @@ public sealed class InMemoryOpportunityStore : IOpportunityStore
 
     public OpportunityRecord? GetByOpportunityId(string opportunityId) =>
         _byId.TryGetValue(opportunityId, out var r) ? r : null;
+
+    public OpportunityRecord? GetByAnonymousSessionId(string sessionId) =>
+        _byId.Values.FirstOrDefault(r => r.AnonymousSessionId == sessionId);
 
     public OpportunityRecord? GetOpenForCustomer(string customerId) =>
         _byId.Values.FirstOrDefault(r => r.CustomerId == customerId && r.State == OpportunityState.Open);

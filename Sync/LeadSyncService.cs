@@ -20,6 +20,21 @@ public sealed class LeadSyncService(HubSpotClient hs, IOpportunityStore store, I
     {
         var result = new LeadSyncResult();
 
+        // 0) Anonymous→known stitching: if the caller supplies both a session id and identity,
+        //    reuse the held opportunity and merge its retargeting signals into this request.
+        if (!string.IsNullOrWhiteSpace(req.AnonymousSessionId))
+        {
+            var held = store.GetByAnonymousSessionId(req.AnonymousSessionId!);
+            if (held is not null)
+            {
+                req.OpportunityId ??= held.OpportunityId;
+                req.DroppedAt ??= held.DroppedAt;
+                req.OffersSeenSnapshot ??= held.OffersSeenSnapshot;
+                log.LogInformation("Stitched session {Session} to opportunity {OppId}",
+                    req.AnonymousSessionId, req.OpportunityId);
+            }
+        }
+
         // 1) Resolve the person.
         var contactId = await ResolveContactAsync(req, result, ct);
         if (contactId is null)
@@ -163,6 +178,9 @@ public sealed class LeadSyncService(HubSpotClient hs, IOpportunityStore store, I
     {
         var rec = store.GetByOpportunityId(req.OpportunityId!) ?? new OpportunityRecord { OpportunityId = req.OpportunityId! };
         rec.CustomerId = req.CustomerId ?? rec.CustomerId;
+        rec.AnonymousSessionId = req.AnonymousSessionId ?? rec.AnonymousSessionId;
+        rec.DroppedAt = req.DroppedAt ?? rec.DroppedAt;
+        rec.OffersSeenSnapshot = req.OffersSeenSnapshot ?? rec.OffersSeenSnapshot;
         rec.HubSpotContactId = contactId ?? rec.HubSpotContactId;
         rec.HubSpotDealId = dealId ?? rec.HubSpotDealId;
         rec.State = OpportunityState.Open;

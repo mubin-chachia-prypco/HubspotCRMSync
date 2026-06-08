@@ -250,8 +250,14 @@ These three items from the README roadmap / plan are now implemented:
   format and `InboundEventProcessor.ResolveObjectType` now resolves the object from `objectTypeId`
   (`0-1`/`0-3`), falling back to the legacy `subscriptionType`. Both shapes are accepted. *Config: §4.*
 
-Still open / not built: Pulse handoff (phase 5), anonymous→known stitching (§11 Q5),
-retargeting mechanism (§11 Q1), and DB-backed stores. See README roadmap.
+- **Anonymous→known stitching.** When a request includes both an `anonymousSessionId` and
+  identity (email/customerId), the service looks up the held anonymous record, reuses its
+  `opportunityId`, and merges its retargeting signals (`droppedAt`, `offersSeenSnapshot`) into
+  the new request before syncing to HubSpot. The resulting deal carries the full context from
+  both the anonymous and authenticated submissions.
+
+Still open / not built: Pulse handoff (phase 5), retargeting mechanism (§11 Q1), and
+DB-backed stores. See README roadmap.
 
 For a runnable, end-to-end local walkthrough (organic + Bayut + anonymous + webhook, with
 expected output), see `local-testing.md`.

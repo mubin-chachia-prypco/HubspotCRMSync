@@ -94,10 +94,15 @@ public sealed class OpportunityRecord
 {
     public required string OpportunityId { get; set; }
     public string? CustomerId { get; set; }
+    public string? AnonymousSessionId { get; set; }
     public string? HubSpotContactId { get; set; }
     public string? HubSpotDealId { get; set; }
     public OpportunityState State { get; set; } = OpportunityState.Open;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    // --- Retargeting signals persisted from the anonymous hold ---
+    public string? DroppedAt { get; set; }
+    public string? OffersSeenSnapshot { get; set; }
 
     // --- HubSpot-owned mirror (top-of-funnel / qualification; HubSpot -> us only) ---
     public string? LifecycleStage { get; set; }   // contact: lifecyclestage

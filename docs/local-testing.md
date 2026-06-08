@@ -154,7 +154,9 @@ The key is always passing back the `opportunityId` — that's how the service fi
 deal and PATCHes it instead of creating a new one. Check HubSpot after each call to confirm
 the deal's amount field updates in place.
 
-### Anonymous drop-off (retargeting signals)
+### Anonymous drop-off → known customer (stitching flow)
+
+**Step 1 — anonymous drop-off** (user browsed but didn't log in):
 ```bash
 curl -s -X POST http://localhost:5080/leads -H 'Content-Type: application/json' -d '{
   "source": "OrganicWeb",
@@ -163,7 +165,28 @@ curl -s -X POST http://localhost:5080/leads -H 'Content-Type: application/json' 
   "offersSeenSnapshot": "ADCB 4.19%, ENBD 4.35%, FAB 4.40%"
 }'
 # -> {"opportunityId":"OPP-<generated>","queued":true}
+# Worker: no identity -> held locally, no HubSpot call. Retargeting signals saved against session.
 ```
+
+**Step 2 — user logs in** (same session id + identity now known):
+```bash
+curl -s -X POST http://localhost:5080/leads -H 'Content-Type: application/json' -d '{
+  "source": "OrganicWeb",
+  "isAuthenticated": true,
+  "customerId": "CUST-0001",
+  "email": "omar@example.com",
+  "firstName": "Omar",
+  "lastName": "Al-Rashid",
+  "anonymousSessionId": "sess-abc123",
+  "dealName": "JVC Townhouse"
+}'
+# Worker: finds held record by sess-abc123, reuses its opportunityId, merges droppedAt +
+# offersSeenSnapshot into this request, then creates contact + deal in HubSpot with full context.
+# Log: Stitched session sess-abc123 to opportunity OPP-<original>
+```
+
+The deal in HubSpot will have both the identity data and the retargeting signals (`dropped_at`,
+`offers_seen_snapshot`) from the anonymous session — one complete record.
 
 ### What the worker logs
 
