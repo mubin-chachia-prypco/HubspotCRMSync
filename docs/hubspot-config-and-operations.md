@@ -163,16 +163,17 @@ Confirm it's working:
 
 ---
 
-### The steps to change a subscription
+### The steps to change a subscription or scope
 
-1. Edit `HubspotApps/<project>/src/app/webhooks/webhooks-hsmeta.json`:
-   - set `config.settings.targetUrl` to the service's public HTTPS endpoint **ending in
-     `/webhooks/hubspot`** (a tunnel like ngrok/cloudflared in dev; the real host in prod);
-   - add/remove subscription entries; set `"active": true` to turn one on.
-2. `hs project upload` (deploys the project to the connected account).
-3. **Reinstall / update the app** so the new subscriptions take effect:
-   *Development → Projects → SyncApp → Distribution → Install (or "Update")*.
-4. Confirm deliveries in HubSpot's webhook logs and that the service returns `200` fast
+1. Edit `HubspotApps/<project>/src/app/webhooks/webhooks-hsmeta.json` and/or `app-hsmeta.json`.
+   - For subscriptions: update `crmObjects` / `legacyCrmObjects` entries; set `"active": true` to enable.
+   - **Never remove** an existing subscription entry — set it to `"active": false` instead. Removing causes `hs project upload` to fail with a component-removal warning.
+   - For scopes: add to `requiredScopes` in `app-hsmeta.json`.
+2. `hs project upload` — deploys updated config to HubSpot.
+3. **Reinstall the app** — *Development → Projects → TestCRMSync → Distribution → Install (or "Update")*. This is mandatory; the upload alone does not apply new scopes or subscriptions.
+4. **Rotate the token** — *Settings → Integrations → Private Apps → your app → Rotate token*. The new token carries the updated scope grant.
+5. Update `appsettings.json` with the rotated token.
+6. Confirm deliveries in HubSpot's webhook logs and that the service returns `200` fast
    (HubSpot expects an ack within ~5s; the service acks then processes async).
 
 Signature validation needs no change — it always uses `HUBSPOT_CLIENT_SECRET` (the app client
@@ -249,6 +250,40 @@ in a single JSON response.
 > **HubSpot doesn't support joins** — there is no single API call that returns a deal with its
 > applications embedded. Two round-trips is the minimum; this is a platform constraint, not a
 > service limitation.
+
+### Required scopes
+
+The private app **must** have these scopes deployed via `hs project upload` (not just set in the UI):
+
+| Scope | Why |
+|---|---|
+| `crm.objects.custom.read` | Read any custom object record (Application, etc.) |
+| `crm.objects.custom.write` | Create/update custom object records |
+| `crm.schemas.custom.read` | Read the custom object schema/property definitions |
+
+These are already in `app-hsmeta.json`. They take effect only after a **successful** `hs project upload`, a reinstall via the distribution action, and a token rotation — adding them in the HubSpot UI alone is not enough when the app is managed via a project.
+
+**Full deploy sequence every time scopes or subscriptions change:**
+
+1. `hs project upload` — deploys the updated config to HubSpot
+2. In HubSpot: *Development → Projects → TestCRMSync → Distribution → Install / Update* — reinstalls the app so the new scopes are applied
+3. Rotate the private app token: *Settings → Integrations → Private Apps → your app → Rotate token*
+4. Update `appsettings.json` with the new token
+
+Skipping step 2 means the old token's scopes are still in effect even after a successful upload.
+
+### Deploying scopes — common blockers
+
+`hs project upload` will refuse to deploy if it detects that existing webhook subscriptions would be removed. This happens when HubSpot's backend knows about subscriptions from a previous deploy that are no longer in `webhooks-hsmeta.json`.
+
+**Fix:** add the missing subscriptions back as `"active": false` so there are no removals.
+
+The `webhooks-hsmeta.json` supports two subscription formats side by side:
+
+- `crmObjects` — the current format. Valid `subscriptionType` values: `object.creation`, `object.deletion`, `object.merge`, `object.restore`, `object.propertyChange`, `object.associationChange`. Note: `privacy.deletion` is **not** valid here.
+- `legacyCrmObjects` — the old format. Use this to retain previously-deployed legacy subscriptions (e.g. `contact.privacyDeletion`, `contact.deletion`). Set them to `"active": false` if they are no longer needed.
+
+Both blocks can coexist in the same file. Keep inactive legacy entries in the file permanently to avoid future removal warnings.
 
 ### Per-environment config
 
