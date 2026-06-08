@@ -51,7 +51,10 @@ curl -s -X POST http://localhost:5080/leads -H 'Content-Type: application/json' 
 # -> {"opportunityId":"OPP-<generated>","queued":true}
 ```
 
-### Organic, authenticated customer
+### Organic, authenticated customer (full flow)
+
+Submit the initial lead — note the `opportunityId` returned:
+
 ```bash
 curl -s -X POST http://localhost:5080/leads -H 'Content-Type: application/json' -d '{
   "source": "OrganicWeb",
@@ -59,10 +62,58 @@ curl -s -X POST http://localhost:5080/leads -H 'Content-Type: application/json' 
   "customerId": "CUST-1024",
   "email": "omar@example.com",
   "firstName": "Omar",
-  "dealName": "JVC Townhouse"
+  "lastName": "Al-Rashid",
+  "phone": "+971501112233",
+  "dealName": "JVC Townhouse",
+  "amount": 1200000
 }'
-# -> {"opportunityId":"OPP-<generated>","queued":true}
+# -> {"opportunityId":"OPP-abc123","queued":true}
 ```
+
+Submit with a customer profile snapshot (salary, employment type, debt):
+
+```bash
+curl -s -X POST http://localhost:5080/leads -H 'Content-Type: application/json' -d '{
+  "source": "OrganicWeb",
+  "isAuthenticated": true,
+  "customerId": "CUST-1024",
+  "opportunityId": "OPP-abc123",
+  "customerProfileSnapshot": "{\"salary\":35000,\"employmentType\":\"salaried\",\"isResident\":true,\"totalDebt\":12000,\"currency\":\"AED\"}"
+}'
+# -> {"opportunityId":"OPP-abc123","queued":true}
+# Worker: PATCHes the deal's customer_profile_snapshot field with the JSON string
+```
+
+Update the deal amount (increase) — pass back the `opportunityId`:
+
+```bash
+curl -s -X POST http://localhost:5080/leads -H 'Content-Type: application/json' -d '{
+  "source": "OrganicWeb",
+  "isAuthenticated": true,
+  "customerId": "CUST-1024",
+  "opportunityId": "OPP-abc123",
+  "amount": 1450000
+}'
+# -> {"opportunityId":"OPP-abc123","queued":true}
+# Worker: finds existing contact by customerId, finds existing deal by opportunityId, PATCHes amount
+```
+
+Update again (decrease — same pattern, just a lower value):
+
+```bash
+curl -s -X POST http://localhost:5080/leads -H 'Content-Type: application/json' -d '{
+  "source": "OrganicWeb",
+  "isAuthenticated": true,
+  "customerId": "CUST-1024",
+  "opportunityId": "OPP-abc123",
+  "amount": 950000
+}'
+# -> {"opportunityId":"OPP-abc123","queued":true}
+```
+
+The key is always passing back the `opportunityId` — that's how the service finds the existing
+deal and PATCHes it instead of creating a new one. Check HubSpot after each call to confirm
+the deal's amount field updates in place.
 
 ### Anonymous drop-off (retargeting signals)
 ```bash

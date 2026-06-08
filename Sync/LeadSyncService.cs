@@ -181,6 +181,7 @@ public sealed class LeadSyncService(HubSpotClient hs, IOpportunityStore store, I
         Add(p, "dealname", req.DealName ?? $"Mortgage {req.OpportunityId}");
         Add(p, "partner_lead_ref", req.PartnerLeadRef);
         Add(p, "lead_source", req.Source.ToString());
+        Add(p, "customer_profile_snapshot", req.CustomerProfileSnapshot);
         Add(p, "dropped_at", req.DroppedAt);
         Add(p, "offers_seen_snapshot", req.OffersSeenSnapshot);
         if (req.Amount is { } amt) p["amount"] = amt.ToString(CultureInfo.InvariantCulture);

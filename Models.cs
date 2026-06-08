@@ -39,6 +39,9 @@ public sealed class LeadSyncRequest
     public string? DealName { get; set; }
     public decimal? Amount { get; set; }
 
+    // --- Customer profile snapshot (raw JSON from portal — salary, employment type, debt, etc.) ---
+    public string? CustomerProfileSnapshot { get; set; }
+
     // --- Retargeting signals (offer is a human-readable snapshot, not a product object) ---
     public string? DroppedAt { get; set; }           // e.g. "offer_selection"
     public string? OffersSeenSnapshot { get; set; }  // e.g. "ADCB 4.19%, ENBD 4.35%"

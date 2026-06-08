@@ -182,14 +182,35 @@ secret) regardless of which subscriptions are active.
 ## 5. Account-side prerequisites (custom properties + pipeline)
 
 Create these **before** the first sync, or create/update calls reject unknown properties
-(full checklist in plan §10):
+(full checklist in plan §10).
 
-- **Contact:** `portal_customer_id` (unique if the tier allows), `lead_source`.
-- **Deal:** `opportunity_id` (unique), `partner_lead_ref`, `dropped_at`, `offers_seen_snapshot`.
+To create a property: **Settings → Properties**, select the object, click **Create property**.
+The **internal name** must match exactly — the label is just display text.
+
+### Contact properties
+
+| Internal name | Type | Why we need it |
+|---|---|---|
+| `portal_customer_id` | Single-line text | Your portal's internal customer ID (e.g. `CUST-1024`). HubSpot has no native slot for this. The service uses it to look up an existing contact by your ID on repeat submissions, avoiding duplicates even when email/phone changes. |
+| `lead_source` | Single-line text | Which channel the lead came from (`OrganicWeb`, `Bayut`, etc.). HubSpot's built-in `hs_lead_source` is a fixed enum with generic values ("Paid Search") that don't map to our partners — this custom field carries our actual source labels. |
+
+### Deal properties
+
+| Internal name | Type | Why we need it |
+|---|---|---|
+| `lead_source` | Single-line text | Same as the contact-level field — records which channel originated the deal. Must be created on **both** the Contact and Deal objects; HubSpot properties are per-object and don't carry over. |
+| `customer_profile_snapshot` | Multi-line text | Raw JSON blob from the customer portal capturing applicant profile data at the time of submission — salary, employment type (salaried/self-employed/resident), debt obligations, etc. Stored as-is; not filterable in HubSpot but gives the sales team full context on the record. Schema evolves with the portal; no migration needed when fields are added. |
+| `opportunity_id` | Single-line text | Your internal opportunity reference (e.g. `OPP-abc123`). **Critical** — this is how the service finds and updates an existing deal on subsequent calls. Without it, every lead submission creates a duplicate deal. |
+| `partner_lead_ref` | Single-line text | The partner's own reference number (e.g. Bayut's `BYT-99812`). Stored for support queries and cross-system reconciliation. |
+| `dropped_at` | Single-line text | Where in the funnel an anonymous user dropped off (e.g. `offer_selection`). Carries retargeting signal for re-engagement campaigns. |
+| `offers_seen_snapshot` | Single-line text | Snapshot of mortgage offers the user saw before dropping off (e.g. `"ADCB 4.19%, ENBD 4.35%"`). Paired with `dropped_at` for retargeting context. |
+
+### Pipeline
+
 - **Mortgage pipeline** — create the pipeline in HubSpot. Record closed-stage internal ids in
   `ClosedDealStages` (§2). `DealStages` is currently unused (see §2).
 - Standard HubSpot props the mirror reads (`lifecyclestage`, `hs_lead_status`, `dealstage`,
-  `hubspot_owner_id`) exist out of the box.
+  `hubspot_owner_id`) exist out of the box — no need to create them.
 
 ---
 

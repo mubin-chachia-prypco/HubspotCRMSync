@@ -66,7 +66,11 @@ public sealed partial class HubSpotClient
             var id = ExtractExistingId(await resp.Content.ReadAsStringAsync(ct));
             if (id is not null) throw new ContactAlreadyExistsException(id);
         }
-        resp.EnsureSuccessStatusCode();
+        if (!resp.IsSuccessStatusCode)
+        {
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            throw new HttpRequestException($"HubSpot {objectType} create failed {(int)resp.StatusCode}: {body}");
+        }
         using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
         return doc.RootElement.GetProperty("id").GetString()!;
     }
@@ -74,7 +78,11 @@ public sealed partial class HubSpotClient
     public async Task UpdateAsync(string objectType, string id, IReadOnlyDictionary<string, string> props, CancellationToken ct)
     {
         using var resp = await SendAsync(() => Json(HttpMethod.Patch, $"/crm/v3/objects/{objectType}/{id}", new { properties = props }), ct);
-        resp.EnsureSuccessStatusCode();
+        if (!resp.IsSuccessStatusCode)
+        {
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            throw new HttpRequestException($"HubSpot {objectType} update {id} failed {(int)resp.StatusCode}: {body}");
+        }
     }
 
     public async Task AssociateDefaultAsync(string fromType, string fromId, string toType, string toId, CancellationToken ct)
