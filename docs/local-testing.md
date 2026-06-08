@@ -46,7 +46,6 @@ curl -s -X POST http://localhost:5080/leads -H 'Content-Type: application/json' 
   "firstName": "Sara", "lastName": "K",
   "phone": "+971501234567",
   "dealName": "Dubai Marina 2BR",
-  "pipelineStage": "qualified",
   "amount": 1850000
 }'
 # -> {"opportunityId":"OPP-<generated>","queued":true}
@@ -60,8 +59,7 @@ curl -s -X POST http://localhost:5080/leads -H 'Content-Type: application/json' 
   "customerId": "CUST-1024",
   "email": "omar@example.com",
   "firstName": "Omar",
-  "dealName": "JVC Townhouse",
-  "pipelineStage": "contacted"
+  "dealName": "JVC Townhouse"
 }'
 # -> {"opportunityId":"OPP-<generated>","queued":true}
 ```
@@ -93,9 +91,8 @@ Outbox message … failed after 5 attempts        <- retry/back-off, then give u
 With a **real sandbox** token, those become a created/updated Contact + Deal and an association,
 and you'd see `Synced OPP-…: contact=<id> deal=<id> held=False`.
 
-> **Note on stages:** `pipelineStage` is mapped to a HubSpot internal stage id via
-> `HubSpot:DealStages` (config doc §2). If that map is empty the value passes through with a
-> warning — fine for this local run, but set the real ids before testing against the sandbox.
+> **Note on stages:** `pipelineStage` has been removed from the request model. Deals are created
+> in HubSpot without a stage — stage management happens directly in the CRM.
 
 ## 3. Webhook receiver (works fully with `HUBSPOT_CLIENT_SECRET`)
 

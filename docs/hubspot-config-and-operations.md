@@ -38,38 +38,12 @@ double-underscore env vars (`HubSpot__BaseUrl=…`) in containers.
 }
 ```
 
-### `DealStages` — **you almost certainly need to set this**
+### `DealStages` — **not currently used; reserved for future stage sync**
 
-HubSpot's API does **not** accept human stage labels ("Qualified"); it wants the pipeline's
-**internal stage id** (e.g. `appointmentscheduled`, or a generated id like `1098…`). The
-portal sends canonical names like `qualified`; this map translates them.
-
-- **Key** = whatever the portal/caller sends in `pipelineStage` (matched case-insensitively).
-- **Value** = the HubSpot internal stage id for that stage.
-- **Unmapped value → passes through unchanged** and logs a warning. So if a caller already
-  sends a real internal id, it still works; if it sends a label with no mapping, HubSpot will
-  reject the write — the warning tells you to add the mapping.
-
-Example once you've read the ids off the sandbox pipeline (plan §10 / §3 pipeline):
-
-```jsonc
-"DealStages": {
-  "new":                    "appointmentscheduled",
-  "contacted":              "qualifiedtobuy",
-  "qualified":              "presentationscheduled",
-  "agreement_in_principle": "decisionmakerboughtin",
-  "proceeding":             "contractsent",
-  "won":                    "closedwon",
-  "lost":                   "closedlost"
-}
-```
-
-> The right-hand ids above are HubSpot's **default** pipeline ids shown only as a shape
-> example — use the **actual** ids from our Mortgage pipeline.
-
-**How to find the internal stage ids:** in HubSpot, *Settings → Objects → Deals → Pipelines*,
-pick the Mortgage pipeline, and each stage's internal name is shown (or via the API:
-`GET /crm/v3/pipelines/deals`). Record them in plan §10's checklist too.
+`pipelineStage` has been removed from the `LeadSyncRequest` model. Deals are pushed to HubSpot
+without a stage — the CRM receives the deal and stage is managed directly in HubSpot. `DealStages`
+remains in config as a reserved hook if outbound stage mapping is reintroduced later (e.g. driven
+by the customer portal). Leave it as an empty object for now.
 
 ### `ClosedDealStages` — drives reuse + the inbound mirror
 
@@ -93,7 +67,7 @@ Two things read it:
 
 | Direction | Trigger | HubSpot fields touched |
 |---|---|---|
-| Outbound (portal → HubSpot) | `POST /leads` → worker | Contact: `portal_customer_id`, `email`, `phone`, `firstname`, `lastname`, `lead_source`. Deal: `opportunity_id`, `dealname`, `dealstage` (mapped), `partner_lead_ref`, `lead_source`, `dropped_at`, `offers_seen_snapshot`, `amount` |
+| Outbound (portal → HubSpot) | `POST /leads` → worker | Contact: `portal_customer_id`, `email`, `phone`, `firstname`, `lastname`, `lead_source`. Deal: `opportunity_id`, `dealname`, `partner_lead_ref`, `lead_source`, `dropped_at`, `offers_seen_snapshot`, `amount` |
 | Inbound (HubSpot → mirror) | webhook + reconcile sweep | **Only HubSpot-owned** props are mirrored: Contact `lifecyclestage`, `hs_lead_status`, `hubspot_owner_id`; Deal `dealstage`, `hubspot_owner_id`. Everything else is ignored |
 
 The inbound allow-list is `HubSpotOwnedFields` in `Sync/LocalMirror.cs`. **If you want HubSpot
@@ -137,6 +111,57 @@ an `objectTypeId` there if you ever subscribe to another object (e.g. company `0
 > **`hs project validate`** before `hs project upload`, and confirm the real delivered payload
 > against the sandbox before flipping to prod.
 
+### Exposing the local service to HubSpot via ngrok
+
+HubSpot webhooks require a **public HTTPS endpoint** — they can't reach `localhost`. In
+development, use [ngrok](https://ngrok.com) to tunnel to your local service.
+
+#### One-time setup
+
+1. Install ngrok: `brew install ngrok/ngrok/ngrok` (or download from ngrok.com).
+2. Authenticate once: `ngrok config add-authtoken <your-token>` (free account is sufficient).
+
+#### Each dev session
+
+```bash
+# 1. Start the service (in one terminal)
+HUBSPOT_CLIENT_SECRET=<your-secret> \
+HUBSPOT_TOKEN=<your-token> \
+ASPNETCORE_URLS=http://localhost:5080 \
+dotnet run --no-launch-profile
+
+# 2. Start the tunnel (in another terminal)
+ngrok http 5080
+```
+
+ngrok prints a public URL like `https://a1b2-203-0-113-1.ngrok-free.app`.  
+Your webhook target URL is: `https://a1b2-203-0-113-1.ngrok-free.app/webhooks/hubspot`
+
+> **Note:** The ngrok URL changes every session on a free plan. You'll need to update
+> `targetUrl` in the hsmeta config and re-upload each time. A paid ngrok plan lets you reserve a
+> static subdomain to avoid this.
+
+#### Update the webhook target URL
+
+After you have the ngrok URL, update the hsmeta file and redeploy:
+
+```bash
+# Edit the targetUrl in:
+#   HubspotApps/<project>/src/app/webhooks/webhooks-hsmeta.json
+# Then:
+hs project upload
+# Reinstall via HubSpot UI: Development → Projects → SyncApp → Distribution → Update
+```
+
+Confirm it's working:
+
+```bash
+# HubSpot webhook delivery logs: Settings → Integrations → Private Apps → your app → Webhooks → Recent deliveries
+# Or watch your dotnet terminal — a valid delivery logs the event type and object id.
+```
+
+---
+
 ### The steps to change a subscription
 
 1. Edit `HubspotApps/<project>/src/app/webhooks/webhooks-hsmeta.json`:
@@ -161,8 +186,8 @@ Create these **before** the first sync, or create/update calls reject unknown pr
 
 - **Contact:** `portal_customer_id` (unique if the tier allows), `lead_source`.
 - **Deal:** `opportunity_id` (unique), `partner_lead_ref`, `dropped_at`, `offers_seen_snapshot`.
-- **Mortgage pipeline** + stages; record each stage's **internal id** and put them in
-  `DealStages` / `ClosedDealStages` (§2).
+- **Mortgage pipeline** — create the pipeline in HubSpot. Record closed-stage internal ids in
+  `ClosedDealStages` (§2). `DealStages` is currently unused (see §2).
 - Standard HubSpot props the mirror reads (`lifecyclestage`, `hs_lead_status`, `dealstage`,
   `hubspot_owner_id`) exist out of the box.
 
@@ -186,9 +211,9 @@ Portal IDs and account names are in `hubspot-app-and-auth-setup.md` §"Sandbox v
 
 These three items from the README roadmap / plan are now implemented:
 
-- **Deal-stage mapping (`DealStageMap`).** `pipelineStage` is translated to the HubSpot
-  internal stage id via `HubSpot:DealStages` before any create/update; unmapped values pass
-  through with a warning. Fixes silent stage-write failures. *Config: §2.*
+- **`pipelineStage` removed from `LeadSyncRequest`.** Deals are created in HubSpot without a
+  stage; stage management happens directly in the CRM. `DealStages` config is reserved but
+  unused. *Config: §2.*
 - **Inbound mirror (`LocalMirror`).** The webhook processor and reconciliation sweep now
   actually update the local opportunity record for HubSpot-owned fields (was log-only),
   honouring the ownership allow-list and a last-writer (`occurredAt`) check. *Config: §3.*

@@ -37,7 +37,6 @@ public sealed class LeadSyncRequest
 
     // --- Deal / top-of-funnel ---
     public string? DealName { get; set; }
-    public string? PipelineStage { get; set; }
     public decimal? Amount { get; set; }
 
     // --- Retargeting signals (offer is a human-readable snapshot, not a product object) ---

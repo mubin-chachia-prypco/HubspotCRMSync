@@ -179,7 +179,6 @@ public sealed class LeadSyncService(HubSpotClient hs, IOpportunityStore store, I
     {
         var p = new Dictionary<string, string> { [OpportunityIdProp] = req.OpportunityId! };
         Add(p, "dealname", req.DealName ?? $"Mortgage {req.OpportunityId}");
-        Add(p, "dealstage", stages.ToInternalStageId(req.PipelineStage));   // canonical name -> HubSpot internal id
         Add(p, "partner_lead_ref", req.PartnerLeadRef);
         Add(p, "lead_source", req.Source.ToString());
         Add(p, "dropped_at", req.DroppedAt);
