@@ -110,6 +110,19 @@ curl -s -X POST http://localhost:5080/leads -H 'Content-Type: application/json' 
 # Worker: PATCHes the deal's customer_profile_snapshot field with the JSON string
 ```
 
+Update the customer profile snapshot (e.g. salary changed, now self-employed):
+
+```bash
+curl -s -X POST http://localhost:5080/leads -H 'Content-Type: application/json' -d '{
+  "source": "OrganicWeb",
+  "isAuthenticated": true,
+  "customerId": "CUST-1024",
+  "opportunityId": "OPP-abc123",
+  "customerProfileSnapshot": "{\"salary\":48000,\"employmentType\":\"self-employed\",\"isResident\":true,\"totalDebt\":8000,\"currency\":\"AED\"}"
+}'
+# Worker: PATCHes customer_profile_snapshot on the existing deal; dealname and other fields unchanged
+```
+
 Update the deal amount (increase) — pass back the `opportunityId`:
 
 ```bash

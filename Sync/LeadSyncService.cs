@@ -127,7 +127,7 @@ public sealed class LeadSyncService(HubSpotClient hs, IOpportunityStore store, I
         }
 
         // Organic source, or partner with a new ref -> new deal.
-        var id = await hs.CreateAsync("deals", DealProps(req), ct);
+        var id = await hs.CreateAsync("deals", DealProps(req, isCreate: true), ct);
         result.DealCreated = true;
         return id;
     }
@@ -145,10 +145,10 @@ public sealed class LeadSyncService(HubSpotClient hs, IOpportunityStore store, I
         return p;
     }
 
-    private Dictionary<string, string> DealProps(LeadSyncRequest req)
+    private Dictionary<string, string> DealProps(LeadSyncRequest req, bool isCreate = false)
     {
         var p = new Dictionary<string, string> { [OpportunityIdProp] = req.OpportunityId! };
-        Add(p, "dealname", req.DealName ?? $"Mortgage {req.OpportunityId}");
+        Add(p, "dealname", req.DealName ?? (isCreate ? $"Mortgage {req.OpportunityId}" : null));
         Add(p, "partner_lead_ref", req.PartnerLeadRef);
         Add(p, "lead_source", req.Source.ToString());
         Add(p, "customer_profile_snapshot", req.CustomerProfileSnapshot);
