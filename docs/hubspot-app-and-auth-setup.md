@@ -6,122 +6,82 @@ this doc is that nobody has to rediscover it.
 
 ## TL;DR
 
-- The service authenticates with a **static access token** from a **developer-platform
-  "projects" app** — *not* a legacy private app, and *not* OAuth.
+- The service authenticates with a **Private App token** (also called the "service key")
+  — a permanent bearer token scoped to this integration only.
 - Two secrets feed the service: **`HUBSPOT_TOKEN`** (API calls) and
-  **`HUBSPOT_CLIENT_SECRET`** (webhook signature). Base URL is `https://api.hubapi.com`.
-- The HubSpot project (named **SyncApp**) is config-as-code that *mints the token*. It is
-  separate from the .NET service; the only thing connecting them is the token.
+  **`HUBSPOT_CLIENT_SECRET`** (webhook signature validation). Base URL is `https://api.hubapi.com`.
+- Scopes are managed directly in the Private App UI — no CLI deploy needed to add/change them.
 - Run the same steps once per environment — **sandbox** and **production** — each yields
   its own token.
 
-## Why this approach (and what we deliberately avoided)
+## Why Private App token (and what we tried before)
 
-HubSpot has three account types, and only some can issue tokens:
-- **App developer account** — builds public/marketplace apps. **Cannot** create the
-  single-account credential we need. (This is the account that keeps pushing the CLI /
-  projects onboarding and shows "no legacy apps.")
-- **Developer test account** and **standard account (Free–Enterprise)** — *can* issue
-  single-account tokens. Our sandbox and production are standard accounts.
+We started on the HubSpot Projects platform (static-auth projects app) but moved to a
+**Private App** ("service key") for simplicity:
 
-Within those, there were three possible credentials:
-1. **Legacy private app** — works today, but HubSpot has renamed these "Legacy apps" and
-   flagged them for forced migration to the projects platform. Building a system of record
-   on it is a ticking clock, so we don't.
-2. **Projects app + OAuth** — fully future-proof and multi-account, but requires a
-   token-exchange + refresh-token flow in our backend. Unnecessary for a single-account,
-   server-to-server integration, and more code to maintain.
-3. **Projects app + static auth** ← **our choice.** It's on the current platform (no
-   migration cliff) *and* issues a permanent, non-expiring bearer token — so the .NET
-   service uses it exactly like a classic token, with **zero auth code**.
+| | Projects platform | Private App (current) |
+|---|---|---|
+| Scope changes | Edit hsmeta, `hs project upload`, reinstall, rotate token | Edit in UI, rotate token |
+| Webhook subscriptions | Config-as-code (`hs project upload`) | UI or API |
+| Token type | Static bearer, non-expiring | Static bearer, non-expiring |
+| Migration risk | HubSpot phasing out legacy; projects path is current | Labelled "Legacy" but still fully supported and the simpler path for single-account integrations |
 
-If we ever need to install across many portals or list on the marketplace, that's the
-moment to switch to OAuth (and add the refresh flow). Not before.
+For a single-account, server-to-server integration the Private App token is the right
+call — it's one credential, managed in one place, with no CLI toolchain required to
+update scopes.
+
+> **Note:** We still keep the HubSpot project (`HubspotApps/TestCRMSync`) for webhook
+> subscription config. The project no longer issues the token — its only role now is
+> deploying the webhook subscription definitions via `hs project upload`.
 
 ## How the pieces fit together
 
 ```
-SyncApp (HubSpot project) ── hs project upload ──► app registered in the HubSpot account
-                                                        │ issues
-                                                        ▼
-                                          static access token + client secret
-                                                        │ copied into env vars / secret store
-                                                        ▼
-        .NET service ──── Authorization: Bearer <token> ────► api.hubapi.com/crm/v3/...
+Private App (HubSpot UI) ──► service key (HUBSPOT_TOKEN)
+                                        │
+                                        ▼
+        .NET service ── Authorization: Bearer <token> ──► api.hubapi.com/crm/v3/...
+
+HubSpot Project (hsmeta) ── hs project upload ──► webhook subscriptions registered
+                                        │
+                                        ▼
+                              HubSpot ──► POST /webhooks/hubspot (signed with HUBSPOT_CLIENT_SECRET)
 ```
 
-The `.NET` code imports nothing from the project and does not run inside HubSpot. The
-project is the app's "paperwork"; the service is the integration.
+## Creating the Private App (run once per environment)
 
-## Creating the app (run once per environment)
+1. In HubSpot: **Settings → Integrations → Private Apps → Create a private app**.
+2. Give it a name (e.g. `SyncApp Service Key`) and description.
+3. On the **Scopes** tab, add:
+   - `crm.objects.contacts.read` + `write`
+   - `crm.objects.deals.read` + `write`
+   - `crm.objects.custom.read` + `write`
+   - `crm.schemas.custom.read`
+4. Click **Create app** → confirm.
+5. Copy the token shown (starts `pat-eu1-…`). This is `HUBSPOT_TOKEN`. **It is only shown once in full** — copy it now.
+6. The **Client secret** for webhook signature validation is on the same page. Copy it too — this is `HUBSPOT_CLIENT_SECRET`.
 
-**Prerequisites**
-- Node.js + the HubSpot CLI: `npm install -g @hubspot/cli@latest`.
-- CLI authenticated to the **target** account: `hs init` (first time) or `hs account auth`
-  (add another account). This uses a **personal access key**.
-- ⚠️ The personal access key authenticates the **CLI only**. It is **not** the app token,
-  and it must **never** be committed (it lands in `hubspot.config.yml` — gitignore it).
+## Rotating the token
 
-**Steps**
-1. Scaffold the project:
-   ```bash
-   hs project create --name SyncApp
-   ```
-   Answer the prompts: **App** → **Privately** → **Static Auth** → add the **Webhook**
-   feature only (skip Card / Functions / Settings / Pages / Workflow Action / SCIM).
-2. Fix the generated `src/app/app-hsmeta.json` — the scaffold ships two things to correct:
-   - It seeds a stray **`"oauth"`** entry in `requiredScopes`. **Remove it** — it isn't a
-     real scope for static auth, and it'll show up as a phantom 5th scope after install.
-   - The `uid`, `name`, and `description` carry placeholder text (e.g. "TestCRMSync"). Rename
-     them to the real app so prod isn't carrying a test label.
-   The corrected config:
-   ```jsonc
-   {
-     "uid": "syncapp",
-     "type": "app",
-     "config": {
-       "name": "SyncApp",
-       "description": "Syncs B2C mortgage leads between the portal and HubSpot (top-of-funnel).",
-       "distribution": "private",
-       "auth": {
-         "type": "static",
-         "requiredScopes": [
-           "crm.objects.contacts.read",
-           "crm.objects.contacts.write",
-           "crm.objects.deals.read",
-           "crm.objects.deals.write"
-         ],
-         "optionalScopes": [],
-         "conditionallyRequiredScopes": []
-       },
-       "permittedUrls": { "fetch": ["https://api.hubapi.com"], "iframe": [], "img": [] }
-     }
-   }
-   ```
-   (Scopes can be expanded later without recreating the app. If you already uploaded with the
-   stray `oauth` scope, just fix it and re-upload — the reinstall reflects the clean list.)
-3. Upload/deploy to the connected account:
-   ```bash
-   hs project upload
-   ```
-4. **Install the app — this is the step that issues the token.** In HubSpot:
-   **Development → Projects → SyncApp → Distribution tab**. Under *Manage distribution*, click
-   **Install now**, review the requested scopes, then click **Connect app**. (A static-token
-   app installs in **one standard account at a time**, plus up to 10 developer test accounts.)
-5. Grab the two credentials — they live in **two different places**:
-   - **Access token** → on the **Distribution tab, and only after a successful install**:
-     click **Show**, then **Copy**. This is `HUBSPOT_TOKEN`. It does **not** appear anywhere
-     before the install completes.
-   - **Client secret** → on the **Auth tab** ("Used for webhook signature validation"):
-     **Show** → **Copy**. This is `HUBSPOT_CLIENT_SECRET`.
-   - The **Client ID** on the Auth tab is an OAuth artifact — **not needed** for static auth.
-   - Viewing or rotating the access token requires **super admin or a developer seat** on that
-     account. If **Show** is greyed out or missing, that permission is why.
+If the token is compromised or you want to cycle it:
+
+1. **Settings → Integrations → Private Apps → your app → Rotate token**.
+2. Update `appsettings.json` (local dev) or the secret store (production) with the new value.
+3. Restart the service. No HubSpot project upload or reinstall needed.
+
+## Adding or changing scopes
+
+1. **Settings → Integrations → Private Apps → your app → Scopes tab**.
+2. Add the new scope → **Update app**.
+3. Rotate the token — the new token carries the updated scope grant.
+4. Update `appsettings.json` / secret store with the rotated token.
+
+No `hs project upload` needed for scope changes.
 
 ## Wiring the service
 
 ```bash
-export HUBSPOT_TOKEN=<access token>
+export HUBSPOT_TOKEN=<private app token>
 export HUBSPOT_CLIENT_SECRET=<client secret>
 export HUBSPOT_BASE_URL=https://api.hubapi.com   # same host for sandbox and prod
 ```
@@ -129,58 +89,62 @@ export HUBSPOT_BASE_URL=https://api.hubapi.com   # same host for sandbox and pro
 In production these belong in a **secret store / CI secrets**, never in source or
 `appsettings.json` (which holds placeholders only). Each environment uses its own token.
 
+> ⚠️ `appsettings.json` is in `.gitignore` and must never be committed — it contains the
+> live token and client secret.
+
 ## Webhooks
 
-On this platform, webhook subscriptions are **config in the project**, not clicks in a UI:
-they live in `src/app/webhooks/*-hsmeta.json` and deploy with `hs project upload`.
+Webhook subscriptions are still managed via the HubSpot project config-as-code:
+they live in `HubspotApps/TestCRMSync/src/app/webhooks/webhooks-hsmeta.json` and deploy
+with `hs project upload` + reinstall.
+
 - Point the target at the service's public HTTPS endpoint: `…/webhooks/hubspot`
   (a tunnel such as ngrok/cloudflared in dev; the real host in prod).
-- Subscribe to `contact.creation`, `contact.propertyChange`, `deal.creation`,
-  `deal.propertyChange` (at least the qualification fields we act on).
-- Requests are signed with the **v3** signature using the app **client secret**; the
-  service already validates this. HubSpot expects an ack within ~5 seconds.
+- The webhook client secret comes from the **Private App**, not the project — use the same
+  `HUBSPOT_CLIENT_SECRET` from step 6 above.
+- Requests are signed with the **v3** signature; the service validates this automatically.
+  HubSpot expects an ack within ~5 seconds.
+
+See `hubspot-config-and-operations.md` §4 for the full subscription change process.
 
 ## Sandbox vs production
 
-Same steps, different account — each gets its own app install and its own token.
+Same steps, different account — each gets its own Private App and its own token.
 
 | Environment | Account | Portal ID |
 |---|---|---|
 | Sandbox | PRYPCO — B2C CRM [SANDBOX] (`c8e055.prypco.com`) | `148631333` |
 | Production | PRYPCO (`prypco.com`) | `148068623` |
 
-For production: `hs account auth` to connect the CLI to the prod portal, `hs project upload`
-the same project there, install on prod via the Distribution tab, then copy prod's token +
-client secret into the prod secret store. Webhook target URL changes to the prod host.
+For production: create a new Private App in the prod portal with the same scopes, copy
+its token + client secret into the prod secret store. Webhook target URL changes to the
+prod host; update `webhooks-hsmeta.json` and run `hs project upload` pointed at prod.
 
 ## Account-side prerequisites (both environments)
 
 Create these before the first sync, or create/update calls will reject unknown properties:
 - **Contact:** `portal_customer_id` (unique if the tier allows), `lead_source`.
-- **Deal:** `opportunity_id` (unique), `partner_lead_ref`, `dropped_at`, `offers_seen_snapshot`.
+- **Deal:** `opportunity_id` (unique), `partner_lead_ref`, `lead_source`, `customer_profile_snapshot`, `dropped_at`, `offers_seen_snapshot`.
 - Make the **Mortgage** pipeline the **default** deal pipeline (or pass `pipeline` explicitly).
+- **Custom object:** create the `Application` object, define its association to Deal, note the
+  type ID (e.g. `2-203884532`) and set `ApplicationObjectTypeId` in config.
 
-(See `hubspot-integration-plan.md` §10 for the full checklist.)
+(See `hubspot-config-and-operations.md` §5–6 for the full property list and custom object setup.)
 
 ## Gotchas (things that cost us time)
 
-- **You can't create this in an app developer account.** Developer accounts only build
-  public/marketplace apps. Create/install the app in the standard CRM account (sandbox or
-  prod). If the UI keeps pushing the CLI/projects onboarding and shows "no legacy apps,"
-  you're in a developer account.
-- **The personal access key is not the app token.** `hs init` stores a personal access key
-  in `hubspot.config.yml` to authenticate the *CLI*. The app's `HUBSPOT_TOKEN` is a different
-  credential, produced by installing the app.
-- **The access token only exists after install, and lives on the Distribution tab** — not the
-  Auth tab. Before install there is only a Client ID + Client secret.
-- **The scaffold seeds a stray `oauth` scope.** Remove it before upload (see step 2).
-- **"Private app" is now labelled "Legacy app."** That's the deprecated path; we use the
-  projects + static-auth path instead.
-- **Showing/rotating the token needs super admin or a developer seat** on the account.
-
-## Migration note
-
-Static-auth projects apps are the current, supported platform. Legacy private apps are
-being sunset; we chose this path specifically to avoid a forced migration of the auth layer
-later. If HubSpot changes the static-auth mechanics, only this doc and the two env values
-should need revisiting — the service code is unaffected.
+- **Scope changes need a token rotation.** After updating scopes in the Private App UI, the
+  existing token still carries the old scope grant. Rotate the token to get a new one that
+  includes the updated scopes.
+- **`hs project upload` blocks if subscriptions are removed.** Never delete an entry from
+  `webhooks-hsmeta.json` — set `"active": false` instead. See `hubspot-config-and-operations.md` §4.
+- **`crmObjects` and `legacyCrmObjects` must coexist.** Previously-deployed legacy subscriptions
+  (e.g. `contact.privacyDeletion`) must stay in the `legacyCrmObjects` block as `active: false`
+  or the upload will fail with a component-removal error.
+- **`privacy.deletion` is not a valid `crmObjects` subscription type.** It only works in
+  `legacyCrmObjects`. Valid `crmObjects` types: `object.creation`, `object.deletion`,
+  `object.merge`, `object.restore`, `object.propertyChange`, `object.associationChange`.
+- **The CLI personal access key is not the service token.** `hs init` stores a personal key
+  in `hubspot.config.yml` for the CLI only. The service token is the Private App token.
+- **`appsettings.json` must never be committed.** It holds the live token and client secret.
+  It is in `.gitignore`. Check before every push.
