@@ -110,28 +110,6 @@ public sealed partial class HubSpotClient
         return ids;
     }
 
-    /// <summary>Batch-read selected properties for a set of object ids (max 100/req).</summary>
-    public async Task<IReadOnlyList<(string Id, IReadOnlyDictionary<string, string?> Props)>> BatchReadAsync(
-        string objectType, IReadOnlyList<string> ids, IReadOnlyList<string> properties, CancellationToken ct)
-    {
-        if (ids.Count == 0) return [];
-        var body = new { properties, inputs = ids.Select(id => new { id }).ToArray() };
-        using var resp = await SendAsync(() => Json(HttpMethod.Post, $"/crm/v3/objects/{objectType}/batch/read", body), ct);
-        resp.EnsureSuccessStatusCode();
-        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
-        var list = new List<(string, IReadOnlyDictionary<string, string?>)>();
-        foreach (var r in doc.RootElement.GetProperty("results").EnumerateArray())
-        {
-            var id = r.GetProperty("id").GetString()!;
-            var props = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-            if (r.TryGetProperty("properties", out var p))
-                foreach (var prop in p.EnumerateObject())
-                    props[prop.Name] = prop.Value.ValueKind == JsonValueKind.Null ? null : prop.Value.GetString();
-            list.Add((id, props));
-        }
-        return list;
-    }
-
     /// <summary>Fetch a single object record with all its properties.</summary>
     public async Task<(string Id, IReadOnlyDictionary<string, string?> Props)?> GetObjectAsync(string objectType, string id, CancellationToken ct)
     {
@@ -150,24 +128,6 @@ public sealed partial class HubSpotClient
             foreach (var prop in p.EnumerateObject())
                 props[prop.Name] = prop.Value.ValueKind == JsonValueKind.Null ? null : prop.Value.GetString();
         return (recordId, props);
-    }
-
-    /// <summary>Reconciliation seam: ids changed since a unix-ms timestamp.</summary>
-    public async Task<IReadOnlyList<string>> SearchChangedSinceAsync(string objectType, long sinceMs, CancellationToken ct)
-    {
-        var body = new
-        {
-            filterGroups = new[] { new { filters = new[] { new { propertyName = "hs_lastmodifieddate", @operator = "GT", value = sinceMs.ToString() } } } },
-            properties = new[] { "hs_lastmodifieddate" },
-            limit = 100
-        };
-        using var resp = await SendAsync(() => Json(HttpMethod.Post, $"/crm/v3/objects/{objectType}/search", body), ct);
-        resp.EnsureSuccessStatusCode();
-        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
-        var ids = new List<string>();
-        foreach (var r in doc.RootElement.GetProperty("results").EnumerateArray())
-            ids.Add(r.GetProperty("id").GetString()!);
-        return ids;
     }
 
     private static HttpRequestMessage Json(HttpMethod m, string path, object body) =>

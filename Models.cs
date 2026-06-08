@@ -70,25 +70,6 @@ public sealed class OutboxMessage
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
-/// <summary>
-/// A single HubSpot webhook event (events arrive as a JSON array of these). Handles both the
-/// legacy payload (subscriptionType like "deal.propertyChange") and the new generic/crmObjects
-/// payload (subscriptionType "object.propertyChange" + an <see cref="ObjectTypeId"/> like "0-3").
-/// </summary>
-public sealed class WebhookEvent
-{
-    [JsonPropertyName("eventId")] public long EventId { get; set; }
-    [JsonPropertyName("subscriptionType")] public string SubscriptionType { get; set; } = "";
-    /// <summary>HubSpot raw object-type id (generic payloads only): 0-1 contact, 0-3 deal, 0-2 company.</summary>
-    [JsonPropertyName("objectTypeId")] public string? ObjectTypeId { get; set; }
-    [JsonPropertyName("objectId")] public long ObjectId { get; set; }
-    [JsonPropertyName("propertyName")] public string? PropertyName { get; set; }
-    [JsonPropertyName("propertyValue")] public string? PropertyValue { get; set; }
-    [JsonPropertyName("occurredAt")] public long OccurredAt { get; set; }
-    [JsonPropertyName("changeSource")] public string? ChangeSource { get; set; }
-    [JsonPropertyName("sourceId")] public string? SourceId { get; set; }
-}
-
 /// <summary>Our local record linking an opportunity to its HubSpot ids (the "DB" seam).</summary>
 public sealed class OpportunityRecord
 {
@@ -104,11 +85,4 @@ public sealed class OpportunityRecord
     public string? DroppedAt { get; set; }
     public string? OffersSeenSnapshot { get; set; }
 
-    // --- HubSpot-owned mirror (top-of-funnel / qualification; HubSpot -> us only) ---
-    public string? LifecycleStage { get; set; }   // contact: lifecyclestage
-    public string? LeadStatus { get; set; }        // contact: hs_lead_status
-    public string? DealStage { get; set; }         // deal: dealstage (HubSpot internal id)
-    public string? OwnerId { get; set; }           // hubspot_owner_id
-    /// <summary>occurredAt/lastmodified of the newest HubSpot change we mirrored — used to drop stale events.</summary>
-    public DateTimeOffset? LastHubSpotChangeAt { get; set; }
 }

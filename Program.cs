@@ -18,15 +18,8 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 builder.Services.AddHttpClient<HubSpotClient>();
 builder.Services.AddSingleton<IOpportunityStore, InMemoryOpportunityStore>();
 builder.Services.AddSingleton<IOutbox, InMemoryOutbox>();
-builder.Services.AddSingleton<IProcessedEvents, InMemoryProcessedEvents>();
-builder.Services.AddSingleton<IEchoGuard, InMemoryEchoGuard>();
-builder.Services.AddSingleton<WebhookSignatureValidator>();
-builder.Services.AddSingleton<DealStageMap>();
-builder.Services.AddSingleton<LocalMirror>();
-builder.Services.AddSingleton<InboundEventProcessor>();
 builder.Services.AddScoped<LeadSyncService>();
 builder.Services.AddHostedService<OutboxWorker>();
-builder.Services.AddHostedService<ReconciliationWorker>();
 
 var app = builder.Build();
 
@@ -71,25 +64,6 @@ app.MapGet("/deals/{opportunityId}", async (string opportunityId, IOpportunitySt
             .Where(a => a is not null)
             .Select(a => new { id = a!.Value.Id, properties = a.Value.Props })
     });
-});
-
-// --- Inbound: HubSpot webhooks. Validate signature, ack fast, process out of band. ---
-app.MapPost("/webhooks/hubspot", async (HttpRequest http, WebhookSignatureValidator validator, InboundEventProcessor processor) =>
-{
-    using var reader = new StreamReader(http.Body);
-    var body = await reader.ReadToEndAsync();
-
-    var fullUri = $"{http.Scheme}://{http.Host}{http.Path}{http.QueryString}";
-    var valid = validator.IsValid(
-        http.Method, fullUri, body,
-        http.Headers["X-HubSpot-Request-Timestamp"].FirstOrDefault(),
-        http.Headers["X-HubSpot-Signature-v3"].FirstOrDefault());
-
-    if (!valid) return Results.Unauthorized();
-
-    var events = JsonSerializer.Deserialize<List<WebhookEvent>>(body) ?? [];
-    _ = Task.Run(() => processor.ProcessAsync(events)); // ack fast; process async (PoC)
-    return Results.Ok();
 });
 
 app.Run();

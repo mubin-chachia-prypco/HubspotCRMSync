@@ -11,7 +11,7 @@ namespace HubSpotLeadSync;
 ///
 /// Anonymous + unidentifiable leads are held locally (no junk HubSpot contact created).
 /// </summary>
-public sealed class LeadSyncService(HubSpotClient hs, IOpportunityStore store, IEchoGuard echo, DealStageMap stages, ILogger<LeadSyncService> log)
+public sealed class LeadSyncService(HubSpotClient hs, IOpportunityStore store, ILogger<LeadSyncService> log)
 {
     public const string OpportunityIdProp = "opportunity_id";    // unique on Deal — the dedup anchor
     public const string CustomerIdProp = "portal_customer_id";   // unique on Contact (if available)
@@ -51,9 +51,6 @@ public sealed class LeadSyncService(HubSpotClient hs, IOpportunityStore store, I
         // 3) Link them (idempotent).
         await hs.AssociateDefaultAsync("contacts", contactId, "deals", dealId, ct);
 
-        // Remember we wrote these, so the resulting webhooks aren't treated as external changes.
-        echo.MarkWritten("contacts", contactId);
-        echo.MarkWritten("deals", dealId);
         PersistLocal(req, contactId, dealId);
 
         result.ContactId = contactId;

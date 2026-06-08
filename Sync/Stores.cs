@@ -8,8 +8,6 @@ public interface IOpportunityStore
     OpportunityRecord? GetByOpportunityId(string opportunityId);
     OpportunityRecord? GetByAnonymousSessionId(string sessionId);
     OpportunityRecord? GetOpenForCustomer(string customerId);
-    OpportunityRecord? GetByHubSpotContactId(string contactId);
-    OpportunityRecord? GetByHubSpotDealId(string dealId);
     void Save(OpportunityRecord record);
 }
 
@@ -25,12 +23,6 @@ public sealed class InMemoryOpportunityStore : IOpportunityStore
 
     public OpportunityRecord? GetOpenForCustomer(string customerId) =>
         _byId.Values.FirstOrDefault(r => r.CustomerId == customerId && r.State == OpportunityState.Open);
-
-    public OpportunityRecord? GetByHubSpotContactId(string contactId) =>
-        _byId.Values.FirstOrDefault(r => r.HubSpotContactId == contactId);
-
-    public OpportunityRecord? GetByHubSpotDealId(string dealId) =>
-        _byId.Values.FirstOrDefault(r => r.HubSpotDealId == dealId);
 
     public void Save(OpportunityRecord record)
     {
@@ -61,31 +53,3 @@ public sealed class InMemoryOutbox : IOutbox
     }
 }
 
-// --- Idempotency: process each webhook eventId at most once ---
-public interface IProcessedEvents { bool TryMarkProcessed(long eventId); }
-
-public sealed class InMemoryProcessedEvents : IProcessedEvents
-{
-    private readonly ConcurrentDictionary<long, byte> _seen = new();
-    public bool TryMarkProcessed(long eventId) => _seen.TryAdd(eventId, 1);
-}
-
-// --- Echo guard: suppress inbound webhooks caused by our own writes ---
-public interface IEchoGuard
-{
-    void MarkWritten(string objectType, string objectId);
-    bool WasWrittenByUsRecently(string objectType, string objectId);
-}
-
-public sealed class InMemoryEchoGuard : IEchoGuard
-{
-    private static readonly TimeSpan Ttl = TimeSpan.FromSeconds(120);
-    private readonly ConcurrentDictionary<string, DateTimeOffset> _writes = new();
-    private static string Key(string t, string id) => $"{t}:{id}";
-
-    public void MarkWritten(string objectType, string objectId) =>
-        _writes[Key(objectType, objectId)] = DateTimeOffset.UtcNow;
-
-    public bool WasWrittenByUsRecently(string objectType, string objectId) =>
-        _writes.TryGetValue(Key(objectType, objectId), out var ts) && DateTimeOffset.UtcNow - ts < Ttl;
-}

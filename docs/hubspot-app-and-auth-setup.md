@@ -14,37 +14,26 @@ this doc is that nobody has to rediscover it.
 - Run the same steps once per environment — **sandbox** and **production** — each yields
   its own token.
 
-## Why Private App token (and what we tried before)
-
-We started on the HubSpot Projects platform (static-auth projects app) but moved to a
-**Private App** ("service key") for simplicity:
-
-| | Projects platform | Private App (current) |
-|---|---|---|
-| Scope changes | Edit hsmeta, `hs project upload`, reinstall, rotate token | Edit in UI, rotate token |
-| Webhook subscriptions | Config-as-code (`hs project upload`) | UI or API |
-| Token type | Static bearer, non-expiring | Static bearer, non-expiring |
-| Migration risk | HubSpot phasing out legacy; projects path is current | Labelled "Legacy" but still fully supported and the simpler path for single-account integrations |
+## Why Private App token
 
 For a single-account, server-to-server integration the Private App token is the right
-call — it's one credential, managed in one place, with no CLI toolchain required to
-update scopes.
+call — one credential, managed entirely in the HubSpot UI, with no CLI toolchain required.
 
-> **Note:** We still keep the HubSpot project (`HubspotApps/TestCRMSync`) for webhook
-> subscription config. The project no longer issues the token — its only role now is
-> deploying the webhook subscription definitions via `hs project upload`.
+| | Private App |
+|---|---|
+| Scope changes | Edit in UI → rotate token |
+| Webhook subscriptions | Configure in Private App UI |
+| Token type | Static bearer, non-expiring |
 
 ## How the pieces fit together
 
 ```
-Private App (HubSpot UI) ──► service key (HUBSPOT_TOKEN)
+Private App (HubSpot UI) ──► service key (HUBSPOT_TOKEN) + client secret (HUBSPOT_CLIENT_SECRET)
                                         │
                                         ▼
         .NET service ── Authorization: Bearer <token> ──► api.hubapi.com/crm/v3/...
-
-HubSpot Project (hsmeta) ── hs project upload ──► webhook subscriptions registered
-                                        │
-                                        ▼
+                                        ▲
+                                        │ (inbound)
                               HubSpot ──► POST /webhooks/hubspot (signed with HUBSPOT_CLIENT_SECRET)
 ```
 
@@ -94,18 +83,18 @@ In production these belong in a **secret store / CI secrets**, never in source o
 
 ## Webhooks
 
-Webhook subscriptions are still managed via the HubSpot project config-as-code:
-they live in `HubspotApps/TestCRMSync/src/app/webhooks/webhooks-hsmeta.json` and deploy
-with `hs project upload` + reinstall.
+Webhook subscriptions are configured directly in the Private App:
 
-- Point the target at the service's public HTTPS endpoint: `…/webhooks/hubspot`
-  (a tunnel such as ngrok/cloudflared in dev; the real host in prod).
-- The webhook client secret comes from the **Private App**, not the project — use the same
-  `HUBSPOT_CLIENT_SECRET` from step 6 above.
+**Settings → Integrations → Private Apps → your app → Webhooks tab**
+
+- Point the target URL at the service's public HTTPS endpoint ending in `/webhooks/hubspot`
+  (use ngrok/cloudflared in dev; the real host in prod).
+- Add subscriptions for the CRM events you want to mirror (contact/deal property changes, creation).
+- The client secret for signature validation is the same `HUBSPOT_CLIENT_SECRET` from step 6.
 - Requests are signed with the **v3** signature; the service validates this automatically.
   HubSpot expects an ack within ~5 seconds.
 
-See `hubspot-config-and-operations.md` §4 for the full subscription change process.
+See `hubspot-config-and-operations.md` §4 for which subscriptions to enable and how to update them.
 
 ## Sandbox vs production
 
@@ -136,15 +125,5 @@ Create these before the first sync, or create/update calls will reject unknown p
 - **Scope changes need a token rotation.** After updating scopes in the Private App UI, the
   existing token still carries the old scope grant. Rotate the token to get a new one that
   includes the updated scopes.
-- **`hs project upload` blocks if subscriptions are removed.** Never delete an entry from
-  `webhooks-hsmeta.json` — set `"active": false` instead. See `hubspot-config-and-operations.md` §4.
-- **`crmObjects` and `legacyCrmObjects` must coexist.** Previously-deployed legacy subscriptions
-  (e.g. `contact.privacyDeletion`) must stay in the `legacyCrmObjects` block as `active: false`
-  or the upload will fail with a component-removal error.
-- **`privacy.deletion` is not a valid `crmObjects` subscription type.** It only works in
-  `legacyCrmObjects`. Valid `crmObjects` types: `object.creation`, `object.deletion`,
-  `object.merge`, `object.restore`, `object.propertyChange`, `object.associationChange`.
-- **The CLI personal access key is not the service token.** `hs init` stores a personal key
-  in `hubspot.config.yml` for the CLI only. The service token is the Private App token.
 - **`appsettings.json` must never be committed.** It holds the live token and client secret.
   It is in `.gitignore`. Check before every push.

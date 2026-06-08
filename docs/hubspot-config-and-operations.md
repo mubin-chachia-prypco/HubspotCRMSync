@@ -10,13 +10,13 @@ Read alongside `hubspot-app-and-auth-setup.md` (how the app/token is created) an
 
 ---
 
-## 1. Where configuration lives (three layers)
+## 1. Where configuration lives
 
 | Layer | Holds | Changed by |
 |---|---|---|
 | **Secret env vars** | `HUBSPOT_TOKEN`, `HUBSPOT_CLIENT_SECRET`, `HUBSPOT_BASE_URL` | Secret store / CI; never in source |
-| **`appsettings.json` → `HubSpot`** (or env via `HubSpot__…`) | Deal-stage mapping, closed-stage list, logging | Edit the file / set config-style env vars |
-| **HubSpot project (`HubspotApps/…`)** | App scopes, **webhook subscriptions**, target URL | Edit `*-hsmeta.json`, `hs project upload`, reinstall |
+| **`appsettings.json` → `HubSpot`** (or env via `HubSpot__…`) | Deal-stage mapping, closed-stage list, `ApplicationObjectTypeId`, logging | Edit the file / set config-style env vars |
+| **HubSpot Private App UI** | App scopes, webhook subscriptions, target URL | Settings → Integrations → Private Apps |
 
 The three secrets are the only things wired directly to env vars in `Program.cs`. Everything
 else binds from the `HubSpot` config section, so it can come from `appsettings.json` **or**
@@ -77,107 +77,25 @@ inbound changes are honoured (the ownership rule, plan §7).
 
 ---
 
-## 4. Updating the app's **webhook subscriptions**
+## 4. Webhook subscriptions (if/when needed)
 
-On the projects platform, webhook subscriptions are **config-as-code**, not clicks in the UI.
-They live in the HubSpot project at `HubspotApps/<project>/src/app/webhooks/webhooks-hsmeta.json`
-and deploy with `hs project upload` + a reinstall.
+Webhooks are not currently active. When you need them, configure them directly in the Private App:
 
-### The subscriptions this service expects
+**Settings → Integrations → Private Apps → your app → Webhooks tab**
 
-We use the **new generic `crmObjects`** subscription format (consistent with the projects
-platform; the `legacyCrmObjects` block is the deprecated path). Subscribe to exactly the
-HubSpot-owned fields the mirror consumes (§3):
-
-| Subscription (`objectType` · `subscriptionType` · `propertyName`) | Why |
-|---|---|
-| `contact` · `object.creation` | new contacts created in HubSpot |
-| `contact` · `object.propertyChange` · `lifecyclestage` | funnel progression |
-| `contact` · `object.propertyChange` · `hs_lead_status` | qualification status |
-| `contact` · `object.propertyChange` · `hubspot_owner_id` | rep ownership |
-| `deal` · `object.creation` | deals created in HubSpot |
-| `deal` · `object.propertyChange` · `dealstage` | top-of-funnel stage moves |
-| `deal` · `object.propertyChange` · `hubspot_owner_id` | rep ownership |
-
-**Payload shapes — the service handles both.** The generic payload sends
-`subscriptionType: "object.propertyChange"` plus an `objectTypeId` (`0-1` contact, `0-3` deal);
-the legacy payload encodes the type in `subscriptionType` (`deal.propertyChange`).
-`Models.cs::WebhookEvent` + `InboundEventProcessor.ResolveObjectType` parse either, so you can
-switch subscription formats without touching code. Mapping lives in `ResolveObjectType` — add
-an `objectTypeId` there if you ever subscribe to another object (e.g. company `0-2`).
-
-> ⚠️ **Validate before upload.** Webhook hsmeta field names are platform-version-specific. The
-> CLI scaffold for this project's `platformVersion` (2026.03) uses `objectType` inside
-> `crmObjects` (some HubSpot docs show `objectName` for other versions). Run
-> **`hs project validate`** before `hs project upload`, and confirm the real delivered payload
-> against the sandbox before flipping to prod.
-
-### Exposing the local service to HubSpot via ngrok
-
-HubSpot webhooks require a **public HTTPS endpoint** — they can't reach `localhost`. In
-development, use [ngrok](https://ngrok.com) to tunnel to your local service.
-
-#### One-time setup
-
-1. Install ngrok: `brew install ngrok/ngrok/ngrok` (or download from ngrok.com).
-2. Authenticate once: `ngrok config add-authtoken <your-token>` (free account is sufficient).
-
-#### Each dev session
+Set the target URL to the service's public HTTPS endpoint ending in `/webhooks/hubspot`. In dev,
+use [ngrok](https://ngrok.com) to expose localhost:
 
 ```bash
-# 1. Start the service (in one terminal)
-HUBSPOT_CLIENT_SECRET=<your-secret> \
-HUBSPOT_TOKEN=<your-token> \
-ASPNETCORE_URLS=http://localhost:5080 \
-dotnet run --no-launch-profile
-
-# 2. Start the tunnel (in another terminal)
 ngrok http 5080
+# -> your target URL: https://<id>.ngrok-free.app/webhooks/hubspot
 ```
 
-ngrok prints a public URL like `https://a1b2-203-0-113-1.ngrok-free.app`.  
-Your webhook target URL is: `https://a1b2-203-0-113-1.ngrok-free.app/webhooks/hubspot`
+Update the target URL in the Private App UI whenever the ngrok URL changes (each session on a free plan). A paid ngrok plan lets you reserve a static subdomain.
 
-> **Note:** The ngrok URL changes every session on a free plan. You'll need to update
-> `targetUrl` in the hsmeta config and re-upload each time. A paid ngrok plan lets you reserve a
-> static subdomain to avoid this.
+### Adding or changing scopes
 
-#### Update the webhook target URL
-
-After you have the ngrok URL, update the hsmeta file and redeploy:
-
-```bash
-# Edit the targetUrl in:
-#   HubspotApps/<project>/src/app/webhooks/webhooks-hsmeta.json
-# Then:
-hs project upload
-# Reinstall via HubSpot UI: Development → Projects → SyncApp → Distribution → Update
-```
-
-Confirm it's working:
-
-```bash
-# HubSpot webhook delivery logs: Settings → Integrations → Private Apps → your app → Webhooks → Recent deliveries
-# Or watch your dotnet terminal — a valid delivery logs the event type and object id.
-```
-
----
-
-### The steps to change a subscription or scope
-
-1. Edit `HubspotApps/<project>/src/app/webhooks/webhooks-hsmeta.json` and/or `app-hsmeta.json`.
-   - For subscriptions: update `crmObjects` / `legacyCrmObjects` entries; set `"active": true` to enable.
-   - **Never remove** an existing subscription entry — set it to `"active": false` instead. Removing causes `hs project upload` to fail with a component-removal warning.
-   - For scopes: add to `requiredScopes` in `app-hsmeta.json`.
-2. `hs project upload` — deploys updated config to HubSpot.
-3. **Reinstall the app** — *Development → Projects → TestCRMSync → Distribution → Install (or "Update")*. This is mandatory; the upload alone does not apply new scopes or subscriptions.
-4. **Rotate the token** — *Settings → Integrations → Private Apps → your app → Rotate token*. The new token carries the updated scope grant.
-5. Update `appsettings.json` with the rotated token.
-6. Confirm deliveries in HubSpot's webhook logs and that the service returns `200` fast
-   (HubSpot expects an ack within ~5s; the service acks then processes async).
-
-Signature validation needs no change — it always uses `HUBSPOT_CLIENT_SECRET` (the app client
-secret) regardless of which subscriptions are active.
+**Settings → Integrations → Private Apps → your app → Scopes tab** → add scope → **Update app** → rotate token → update `appsettings.json`.
 
 ---
 
