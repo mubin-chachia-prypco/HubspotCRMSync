@@ -37,7 +37,9 @@ curl -s http://localhost:5080/health        # -> {"status":"ok"}
 
 ## 2. Submit leads
 
-### Bayut partner lead (identified by email)
+### Bayut partner lead — new deal per unique partnerLeadRef
+
+First submission (new ref → new deal):
 ```bash
 curl -s -X POST http://localhost:5080/leads -H 'Content-Type: application/json' -d '{
   "source": "Bayut",
@@ -49,6 +51,30 @@ curl -s -X POST http://localhost:5080/leads -H 'Content-Type: application/json' 
   "amount": 1850000
 }'
 # -> {"opportunityId":"OPP-<generated>","queued":true}
+# Worker: creates contact + deal
+```
+
+Same ref again → updates the existing deal (e.g. amount changed):
+```bash
+curl -s -X POST http://localhost:5080/leads -H 'Content-Type: application/json' -d '{
+  "source": "Bayut",
+  "partnerLeadRef": "BYT-99812",
+  "email": "sara@example.com",
+  "amount": 2000000
+}'
+# Worker: finds deal by partner_lead_ref BYT-99812, PATCHes amount
+```
+
+Different ref → new deal for the same contact:
+```bash
+curl -s -X POST http://localhost:5080/leads -H 'Content-Type: application/json' -d '{
+  "source": "Bayut",
+  "partnerLeadRef": "BYT-99813",
+  "email": "sara@example.com",
+  "dealName": "Palm Jumeirah Studio",
+  "amount": 950000
+}'
+# Worker: no deal found for BYT-99813 -> creates a second deal for Sara
 ```
 
 ### Organic, authenticated customer (full flow)

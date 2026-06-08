@@ -88,15 +88,16 @@ public sealed class LeadSyncService(HubSpotClient hs, IOpportunityStore store, I
 
     private async Task<string> ResolveDealAsync(LeadSyncRequest req, string contactId, LeadSyncResult result, CancellationToken ct)
     {
+        // Explicit HubSpot deal id supplied -> direct update.
         if (!string.IsNullOrWhiteSpace(req.HubSpotDealId))
         {
             await hs.UpdateAsync("deals", req.HubSpotDealId!, DealProps(req), ct);
             return req.HubSpotDealId!;
         }
 
-        var oppId = req.OpportunityId!; // minted by the endpoint if it was absent
+        var oppId = req.OpportunityId!; // minted by the endpoint if absent
 
-        // Known opportunity (local record) -> update its deal.
+        // Caller passed back a known opportunityId -> continuation of an existing deal.
         var rec = store.GetByOpportunityId(oppId);
         if (rec?.HubSpotDealId is not null)
         {
@@ -104,7 +105,7 @@ public sealed class LeadSyncService(HubSpotClient hs, IOpportunityStore store, I
             return rec.HubSpotDealId;
         }
 
-        // No local record -> search HubSpot by our opportunity_id.
+        // Local store has no record (e.g. after restart) -> search HubSpot by opportunityId.
         var byOpp = await hs.FindIdByPropertyAsync("deals", OpportunityIdProp, oppId, ct);
         if (byOpp is not null)
         {
@@ -112,54 +113,23 @@ public sealed class LeadSyncService(HubSpotClient hs, IOpportunityStore store, I
             return byOpp;
         }
 
-        // Returning customer with an OPEN opportunity in our local store -> reuse that deal.
-        if (!string.IsNullOrWhiteSpace(req.CustomerId))
+        // Partner source with a partnerLeadRef -> dedup by the partner's own reference.
+        // Same ref = same deal (update). New ref = new deal (create below).
+        var isPartner = req.Source is not (LeadSource.OrganicWeb or LeadSource.OrganicApp);
+        if (isPartner && !string.IsNullOrWhiteSpace(req.PartnerLeadRef))
         {
-            var open = store.GetOpenForCustomer(req.CustomerId!);
-            if (open?.HubSpotDealId is not null)
+            var byRef = await hs.FindIdByPropertyAsync("deals", "partner_lead_ref", req.PartnerLeadRef!, ct);
+            if (byRef is not null)
             {
-                await hs.UpdateAsync("deals", open.HubSpotDealId, DealProps(req), ct);
-                return open.HubSpotDealId;
+                await hs.UpdateAsync("deals", byRef, DealProps(req), ct);
+                return byRef;
             }
         }
 
-        // Local store had nothing (e.g. after a restart, or an organic lead with no customer id):
-        // ask HubSpot which deals this contact already has, and reuse an open one. Uses the v4
-        // associations GET + a batch read of dealstage — not the rate-limited Search endpoint.
-        var openViaHubSpot = await FindOpenDealViaAssociationsAsync(contactId, ct);
-        if (openViaHubSpot is not null)
-        {
-            await hs.UpdateAsync("deals", openViaHubSpot, DealProps(req), ct);
-            return openViaHubSpot;
-        }
-
-        // Genuinely new opportunity -> create.
+        // Organic source, or partner with a new ref -> new deal.
         var id = await hs.CreateAsync("deals", DealProps(req), ct);
         result.DealCreated = true;
         return id;
-    }
-
-    /// <summary>
-    /// Find an OPEN deal already associated with the contact in HubSpot. "Open" = a dealstage not
-    /// listed in <see cref="HubSpotOptions.ClosedDealStages"/>. If the contact has more than one
-    /// open deal we reuse the first and warn — the one-vs-many-open-deals rule is plan §11 Q6.
-    /// </summary>
-    private async Task<string?> FindOpenDealViaAssociationsAsync(string contactId, CancellationToken ct)
-    {
-        var dealIds = await hs.GetAssociatedIdsAsync("contacts", contactId, "deals", ct);
-        if (dealIds.Count == 0) return null;
-
-        var deals = await hs.BatchReadAsync("deals", dealIds, new[] { "dealstage" }, ct);
-        var open = deals
-            .Where(d => !stages.IsClosedStage(d.Props.GetValueOrDefault("dealstage")))
-            .Select(d => d.Id)
-            .ToList();
-
-        if (open.Count == 0) return null;
-        if (open.Count > 1)
-            log.LogWarning("Contact {Contact} has {Count} open deals in HubSpot; reusing {Deal}. " +
-                "Concurrency rule (plan §11 Q6) is unresolved.", contactId, open.Count, open[0]);
-        return open[0];
     }
 
     private static Dictionary<string, string> ContactProps(LeadSyncRequest req)

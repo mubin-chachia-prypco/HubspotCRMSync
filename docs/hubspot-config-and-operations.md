@@ -67,7 +67,7 @@ Two things read it:
 
 | Direction | Trigger | HubSpot fields touched |
 |---|---|---|
-| Outbound (portal → HubSpot) | `POST /leads` → worker | Contact: `portal_customer_id`, `email`, `phone`, `firstname`, `lastname`, `lead_source`. Deal: `opportunity_id`, `dealname`, `partner_lead_ref`, `lead_source`, `dropped_at`, `offers_seen_snapshot`, `amount` |
+| Outbound (portal → HubSpot) | `POST /leads` → worker | Contact: `portal_customer_id`, `email`, `phone`, `firstname`, `lastname`, `lead_source`. Deal: `opportunity_id`, `dealname`, `partner_lead_ref`, `lead_source`, `customer_profile_snapshot`, `dropped_at`, `offers_seen_snapshot`, `amount` |
 | Inbound (HubSpot → mirror) | webhook + reconcile sweep | **Only HubSpot-owned** props are mirrored: Contact `lifecyclestage`, `hs_lead_status`, `hubspot_owner_id`; Deal `dealstage`, `hubspot_owner_id`. Everything else is ignored |
 
 The inbound allow-list is `HubSpotOwnedFields` in `Sync/LocalMirror.cs`. **If you want HubSpot
@@ -238,10 +238,13 @@ These three items from the README roadmap / plan are now implemented:
 - **Inbound mirror (`LocalMirror`).** The webhook processor and reconciliation sweep now
   actually update the local opportunity record for HubSpot-owned fields (was log-only),
   honouring the ownership allow-list and a last-writer (`occurredAt`) check. *Config: §3.*
-- **Find-open-deal via HubSpot associations.** When the local store has no record (e.g. after
-  a restart, or an organic lead with no customer id), the service now asks HubSpot for the
-  contact's associated deals and reuses an open one (`ClosedDealStages` decides "open") instead
-  of always creating a duplicate. *Config: §2 `ClosedDealStages`.*
+- **Source-aware deal resolution.** Each source has its own dedup key — no blind reuse of open
+  deals across unrelated journeys:
+  - **`opportunityId` provided** → always update that specific deal (all sources).
+  - **Partner source** (`Bayut`, `Dubizzle`, etc.) **+ `partnerLeadRef`** → dedup by the
+    partner's reference; same ref updates the deal, new ref creates a new one.
+  - **Organic** (`OrganicWeb`, `OrganicApp`) **with no `opportunityId`** → always create a new
+    deal; each new journey start is a distinct opportunity.
 
 - **Webhook payload: new generic `crmObjects` format.** Subscriptions moved to the generic
   format and `InboundEventProcessor.ResolveObjectType` now resolves the object from `objectTypeId`
