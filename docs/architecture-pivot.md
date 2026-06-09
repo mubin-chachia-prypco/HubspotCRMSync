@@ -1,75 +1,98 @@
-# Architecture Pivot — Webhook-Driven Updates & CRM Cards
+# Architecture Pivot — HubSpot Workflow Webhooks & CRM Cards
 
-Two changes from the original design, documented here before implementation.
+Two decisions that replace the original REST-API-push approach.
 
 ---
 
-## 1. Webhook-Driven Updates (Portal → Sync Service → HubSpot)
+## 1. HubSpot Workflow Webhook Triggers (pushing data into HubSpot)
 
-### What changes
+### The idea
 
-| | Before | After |
-|---|---|---|
-| Interface | Portal calls `POST /leads` (REST) | Portal fires a webhook event to the sync service |
-| Trigger | Synchronous request/response | Event-driven, fire-and-forget from portal's perspective |
-| Processing | Same transactional outbox pattern | Same — webhook enqueues to outbox, worker syncs to HubSpot |
+Instead of calling HubSpot's CRM REST API to create/update records directly, we POST to a
+**HubSpot-provided webhook URL**. HubSpot receives the payload, a Workflow fires, and HubSpot
+updates its own records internally. We don't touch the API — HubSpot does the work.
 
-HubSpot remains the source of truth. The sync service is still the intermediary — it receives events from the portal and calls HubSpot's CRM REST API to create/update records. The only thing that changes is the interface between the portal and the sync service.
+### How it works
 
-### New flow
+1. In HubSpot: create a Workflow with **"Webhook"** as the enrollment trigger.
+2. HubSpot generates a unique URL for that workflow (e.g. `https://api.hubapi.com/automation/v4/webhook-triggers/<portalId>/<workflowId>`).
+3. Your service POSTs a JSON payload to that URL when something changes.
+4. The workflow fires, maps payload fields to CRM properties, and updates the contact/deal.
 
 ```
 Customer updates profile in portal
         │
         ▼
-Portal fires webhook event
-  POST /events
-  Headers: X-Portal-Signature: <hmac>
-  Body: { "type": "lead.updated", "payload": { ... } }
+Sync service (or portal directly)
+  POST https://api.hubapi.com/automation/v4/webhook-triggers/<id>
+  {
+    "email": "omar@example.com",
+    "opportunity_id": "OPP-abc123",
+    "amount": 1450000,
+    "customer_profile_snapshot": "{...}"
+  }
         │
         ▼
-Sync service validates signature, enqueues to outbox
-        │
-        ▼
-OutboxWorker picks up, calls HubSpot CRM API
-  PATCH /crm/v3/objects/contacts/{id}
-  PATCH /crm/v3/objects/deals/{id}
+HubSpot Workflow runs
+  → Find contact by email
+  → Update deal properties
+  → Trigger any downstream automations (notifications, stage moves, etc.)
 ```
 
-### Event types to handle
+### What this removes from our service
 
-| Event type | Trigger | HubSpot action |
+The service no longer needs to:
+- Look up HubSpot contact/deal IDs
+- Call `POST /crm/v3/objects/contacts` or `PATCH /crm/v3/objects/deals/{id}`
+- Manage deduplication logic (HubSpot workflows handle this)
+- Retry and backoff on HubSpot API errors
+
+The service becomes a thin relay: validate the inbound event, format the payload, POST to HubSpot.
+
+### Workflows to set up (in HubSpot)
+
+| Workflow | Trigger | Actions |
 |---|---|---|
-| `lead.created` | New lead starts the flow | Create contact + deal |
-| `lead.updated` | Customer updates profile/amount | Patch existing contact/deal |
-| `lead.identified` | Anonymous session → logged in | Stitch + create in HubSpot |
-| `lead.dropped` | Customer exits at a step | Update `dropped_at` + `offers_seen_snapshot` on deal |
+| **New Lead** | Webhook — `type: lead.created` | Create/upsert contact; create deal; associate them |
+| **Profile Update** | Webhook — `type: lead.updated` | Find contact by email; update deal properties |
+| **Anonymous Identified** | Webhook — `type: lead.identified` | Merge anonymous session into contact; update deal |
+| **Lead Dropped** | Webhook — `type: lead.dropped` | Update `dropped_at`, `offers_seen_snapshot` on deal |
 
-### Signature validation
+Each workflow gets its own URL. The service posts to the right URL based on the event type.
 
-The portal signs each event with a shared secret (stored as `PORTAL_WEBHOOK_SECRET` env var).
-The sync service validates before processing:
+### Payload shape
 
+Keep it flat and explicit — HubSpot workflow field mapping works best with simple key-value pairs:
+
+```json
+{
+  "email": "omar@example.com",
+  "first_name": "Omar",
+  "last_name": "Al-Rashid",
+  "phone": "+971501112233",
+  "portal_customer_id": "CUST-1024",
+  "opportunity_id": "OPP-abc123",
+  "partner_lead_ref": "BYT-99812",
+  "lead_source": "Bayut",
+  "deal_name": "Dubai Marina 2BR",
+  "amount": 1850000,
+  "customer_profile_snapshot": "{\"salary\":35000,\"employmentType\":\"salaried\"}",
+  "dropped_at": "offer_selection",
+  "offers_seen_snapshot": "ADCB 4.19%, ENBD 4.35%"
+}
 ```
-HMAC-SHA256(secret, timestamp + "." + body)
-```
 
-Reject if timestamp is older than 5 minutes (replay protection).
+### HubSpot tier requirement
 
-### Endpoint design
+Workflow Webhook Triggers require **Sales Hub Professional or Enterprise** (or Marketing Hub Pro+).
+Confirm the portal's tier before relying on this feature.
 
-```
-POST /events
-Headers:
-  X-Portal-Signature: <hmac>
-  X-Portal-Timestamp: <unix-ms>
-Body: { "type": "lead.updated", "payload": { <LeadSyncRequest fields> } }
+### Open questions
 
-Response: 200 OK (ack fast; process async via outbox)
-```
-
-The payload shape mirrors `LeadSyncRequest` so the existing sync logic is reused with
-minimal changes — the endpoint just validates, wraps in an `OutboxMessage`, and returns.
+- Do we need one workflow per event type, or can one workflow branch on the payload?
+- How does the "New Lead" workflow handle duplicate emails (upsert vs reject)?
+- Deal association in workflows — can HubSpot auto-associate by `opportunity_id` or does the
+  workflow need a lookup step?
 
 ---
 
@@ -78,132 +101,107 @@ minimal changes — the endpoint just validates, wraps in an `OutboxMessage`, an
 ### The problem
 
 Bank products, mortgage offers, and other external data live in systems we don't own.
-We don't want to copy and maintain that data in HubSpot — it goes stale and creates a
-second source of truth.
+Copying it into HubSpot creates a second source of truth that goes stale.
 
 ### The solution: store the reference, fetch the data on demand
 
 ```
 HubSpot Deal
   ├── bank_product_id: "PROD-7821"      ← just the pointer, stored in HubSpot
-  └── [CRM Card in sidebar]
-          │ on load, reads bank_product_id
+  └── [CRM Card in deal sidebar]
+          │ on load, reads bank_product_id from the deal
           ▼
-      Sync service /cards/bank-product?dealId=...&bankProductId=PROD-7821
-          │ calls external bank API
+      Your service: GET /cards/bank-product?bankProductId=PROD-7821
+          │ calls external bank API / aggregator
           ▼
-      Returns formatted data → HubSpot renders in card
+      Returns formatted data → HubSpot renders it in the card
 ```
 
-The sales rep sees live bank product data (rates, terms, LTV, eligibility) in the HubSpot
-deal sidebar without that data ever being stored in HubSpot.
+The sales rep sees live bank product data (rate, LTV, term, eligibility) in the deal sidebar.
+That data never touches your database.
 
-### How HubSpot CRM Cards work
+### How CRM Cards work
 
-HubSpot CRM Cards (Private App feature, no Projects platform needed) work as follows:
+CRM Cards are a Private App feature — no Projects platform or CLI needed.
 
-1. You register a card in the Private App — give it a title, which objects it appears on
-   (e.g. Deal), and a **data fetch URL** on your backend.
-2. When a sales rep opens a deal, HubSpot calls your data fetch URL with:
-   - The CRM record's properties (including any you specify, e.g. `bank_product_id`)
-   - A user token scoped to that request
-3. Your backend fetches the real data from the external system using the ID from the CRM
-   properties, and returns a structured JSON response.
-4. HubSpot renders the response as a card in the sidebar — labels, values, links, buttons.
-
-No iframe, no frontend code to write. Your backend returns JSON; HubSpot does the rendering.
+1. Register the card in the Private App settings — give it a name, pick which object it
+   appears on (Deal), and provide a **data fetch URL** on your backend.
+2. Declare which CRM properties to pass through (e.g. `bank_product_id`, `opportunity_id`).
+3. When a rep opens a deal in HubSpot, HubSpot calls your data fetch URL with those
+   property values as query params.
+4. Your endpoint fetches the real data using the ID, and returns a structured JSON response.
+5. HubSpot renders it as a card — no frontend to write.
 
 ### Card backend endpoint
 
 ```
 GET /cards/bank-product
-Query params supplied by HubSpot:
+Query params (sent by HubSpot):
   portalId=148631333
-  userId=<hs-user-id>
   associatedObjectId=<deal-hs-id>
   associatedObjectType=DEAL
-  bank_product_id=PROD-7821        ← property you declared in card config
+  bank_product_id=PROD-7821          ← declared in card config
+  opportunity_id=OPP-abc123
 
-Response shape (HubSpot CRM Card format):
+Response (HubSpot CRM Card format):
 {
   "results": [
     {
       "objectId": "PROD-7821",
       "title": "ADCB Home Finance — Fixed 4.19%",
       "properties": [
-        { "label": "Rate", "dataType": "STRING", "value": "4.19%" },
-        { "label": "LTV", "dataType": "STRING", "value": "80%" },
-        { "label": "Max Term", "dataType": "STRING", "value": "25 years" },
+        { "label": "Rate",       "dataType": "STRING", "value": "4.19%" },
+        { "label": "LTV",        "dataType": "STRING", "value": "80%" },
+        { "label": "Max Term",   "dataType": "STRING", "value": "25 years" },
         { "label": "Min Salary", "dataType": "STRING", "value": "AED 15,000" }
-      ],
-      "actions": [
-        {
-          "type": "IFRAME",
-          "label": "View full product sheet",
-          "width": 890,
-          "height": 748,
-          "uri": "https://your-service/product-details/PROD-7821"
-        }
       ]
     }
   ]
 }
 ```
 
-### HubSpot properties to add (per object)
+### HubSpot properties needed on Deal
 
-**Deal:**
 | Property | Type | Purpose |
 |---|---|---|
 | `bank_product_id` | Single-line text | Reference to the matched bank product |
 | `bank_product_source` | Single-line text | Which bank/aggregator the product came from |
 
-### Security — validating the card request
+### Validating the card request
 
-HubSpot signs every card data fetch request with the Private App's client secret (same
-`HUBSPOT_CLIENT_SECRET`). Validate using the v3 signature before calling the external system:
-
-```
-HMAC-SHA256(clientSecret, requestMethod + uri + body + timestamp)
-```
-
-This is the same validation logic as HubSpot webhooks — the same `WebhookSignatureValidator`
-class can be reused.
-
-### What lives where
-
-| Data | Lives in | Why |
-|---|---|---|
-| `bank_product_id` (the pointer) | HubSpot Deal property | HubSpot is source of truth for which product is matched |
-| Product rates, terms, LTV, eligibility | External bank system / aggregator | We don't own it; it changes frequently |
-| Which card to show | Private App card config | One-time setup, no deploy needed to change data |
-| Card rendering | HubSpot (from our JSON response) | No frontend to build or host |
+HubSpot signs every card data fetch request with your Private App's client secret.
+Validate using the v3 signature before calling the external system — same logic as
+webhook validation (`HMAC-SHA256(clientSecret, method + uri + body + timestamp)`).
 
 ### Extending to other external systems
 
-The same pattern applies to anything else you don't want to replicate:
-- Mortgage calculator results — store `calculator_session_id`, fetch on demand
-- Credit bureau data — store `bureau_ref`, fetch on demand
-- Partner (Bayut/Dubizzle) lead details — store `partner_lead_ref`, fetch on demand
+The same pattern applies to anything you don't want to replicate in HubSpot:
 
-Each gets its own CRM Card and its own backend endpoint. The card config in HubSpot declares
-which properties to pass through; the backend decides how to fetch and format the response.
+| External data | ID stored in HubSpot | Card endpoint |
+|---|---|---|
+| Bank product | `bank_product_id` on Deal | `/cards/bank-product` |
+| Mortgage calculator result | `calculator_session_id` on Deal | `/cards/calculator` |
+| Credit bureau report | `bureau_ref` on Contact | `/cards/bureau` |
+| Partner lead details | `partner_lead_ref` on Deal | `/cards/partner-lead` |
+
+Each card is one registration in the Private App and one endpoint in your service.
+
+### Open questions
+
+- **Multiple products per deal** — if a deal can match several bank products, the card
+  `results` array supports multiple items, but HubSpot only stores one `bank_product_id`.
+  Options: comma-separated IDs in the property, or a custom `MatchedProduct` object with
+  one row per product associated to the deal.
+- **Which object does the card live on** — Deal, or the Application custom object?
+- **Bank API auth** — what credentials does the external bank/aggregator API require?
 
 ---
 
 ## Implementation order
 
-1. **Webhook receiver** — `POST /events` endpoint + signature validation + outbox enqueue
-2. **Remove** `POST /leads` (or keep temporarily while portal migrates)
-3. **Bank product CRM Card** — add `bank_product_id` property to Deal, register card in
-   Private App, build `/cards/bank-product` endpoint
-4. **Additional cards** as external data sources are identified
-
----
-
-## Open decisions
-
-- **Portal webhook secret** — agree on the shared secret and rotation process with the portal team
-- **External bank API** — what's the API shape? Does it require auth? Rate limits?
-- **Card object placement** — should the bank product card live on Deal, or on a custom Application object?
-- **Multiple products per deal** — a deal might match multiple bank products; the card response supports multiple `results` so this is handled, but the property model needs to store multiple IDs (comma-separated, or a custom object with one row per product)
+1. Set up HubSpot Workflow Webhook Triggers (in HubSpot UI — no code)
+2. Build `POST /events` endpoint in the service — validate, format, relay to the right workflow URL
+3. Add `bank_product_id` property to Deal in HubSpot
+4. Register the CRM Card in the Private App UI
+5. Build `/cards/bank-product` endpoint
+6. Add more cards as external data sources are confirmed
