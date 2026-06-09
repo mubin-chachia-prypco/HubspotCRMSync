@@ -14,51 +14,49 @@ updates its own records internally. We don't touch the API — HubSpot does the 
 
 ### How it works
 
-1. In HubSpot: create a Workflow with **"Webhook"** as the enrollment trigger.
-2. HubSpot generates a unique URL for that workflow (e.g. `https://api.hubapi.com/automation/v4/webhook-triggers/<portalId>/<workflowId>`).
-3. Your service POSTs a JSON payload to that URL when something changes.
-4. The workflow fires, maps payload fields to CRM properties, and updates the contact/deal.
+1. **HubSpot team** creates Workflows with "Webhook" as the enrollment trigger and sends us the URLs.
+2. **Our service** POSTs a JSON payload to the right URL when something changes.
+3. HubSpot's workflow fires, maps the payload fields to CRM properties, and does the rest.
 
 ```
 Customer updates profile in portal
         │
         ▼
-Sync service (or portal directly)
-  POST https://api.hubapi.com/automation/v4/webhook-triggers/<id>
-  {
-    "email": "omar@example.com",
-    "opportunity_id": "OPP-abc123",
-    "amount": 1450000,
-    "customer_profile_snapshot": "{...}"
-  }
+Our service
+  POST <hubspot-workflow-webhook-url>
+  { "email": "...", "opportunity_id": "...", "amount": 1450000, ... }
         │
         ▼
-HubSpot Workflow runs
-  → Find contact by email
-  → Update deal properties
-  → Trigger any downstream automations (notifications, stage moves, etc.)
+HubSpot Workflow (their responsibility)
+  → find/create contact, update deal, trigger automations
 ```
 
-### What this removes from our service
+### Responsibility split
 
-The service no longer needs to:
-- Look up HubSpot contact/deal IDs
-- Call `POST /crm/v3/objects/contacts` or `PATCH /crm/v3/objects/deals/{id}`
-- Manage deduplication logic (HubSpot workflows handle this)
-- Retry and backoff on HubSpot API errors
-
-The service becomes a thin relay: validate the inbound event, format the payload, POST to HubSpot.
-
-### Workflows to set up (in HubSpot)
-
-| Workflow | Trigger | Actions |
+| | Our service | HubSpot team |
 |---|---|---|
-| **New Lead** | Webhook — `type: lead.created` | Create/upsert contact; create deal; associate them |
-| **Profile Update** | Webhook — `type: lead.updated` | Find contact by email; update deal properties |
-| **Anonymous Identified** | Webhook — `type: lead.identified` | Merge anonymous session into contact; update deal |
-| **Lead Dropped** | Webhook — `type: lead.dropped` | Update `dropped_at`, `offers_seen_snapshot` on deal |
+| Workflow setup | ✗ | ✓ — build workflows, configure field mapping |
+| Webhook URLs | Receive and store in config | ✓ — provide one URL per workflow |
+| Payload format | ✓ — agree and POST correctly | ✓ — map fields in workflow |
+| CRM dedup/upsert logic | ✗ | ✓ — handled inside the workflow |
+| Downstream automations | ✗ | ✓ — notifications, stage moves, assignments |
 
-Each workflow gets its own URL. The service posts to the right URL based on the event type.
+Our service has no knowledge of HubSpot internals — just a URL and a payload shape per event type.
+
+### Webhook URLs (add when provided by HubSpot team)
+
+Store in config / environment variables — never hardcode:
+
+```json
+"HubSpot": {
+  "WorkflowWebhooks": {
+    "LeadCreated":          "<url>",
+    "LeadUpdated":          "<url>",
+    "LeadIdentified":       "<url>",
+    "LeadDropped":          "<url>"
+  }
+}
+```
 
 ### Payload shape
 
@@ -82,17 +80,11 @@ Keep it flat and explicit — HubSpot workflow field mapping works best with sim
 }
 ```
 
-### HubSpot tier requirement
+### Open questions (to align with HubSpot team)
 
-Workflow Webhook Triggers require **Sales Hub Professional or Enterprise** (or Marketing Hub Pro+).
-Confirm the portal's tier before relying on this feature.
-
-### Open questions
-
-- Do we need one workflow per event type, or can one workflow branch on the payload?
-- How does the "New Lead" workflow handle duplicate emails (upsert vs reject)?
-- Deal association in workflows — can HubSpot auto-associate by `opportunity_id` or does the
-  workflow need a lookup step?
+- One workflow per event type, or one workflow that branches on `type`?
+- Exact field names they expect in the payload — agree before building
+- Do they need `opportunity_id` in every payload to find the right deal?
 
 ---
 
