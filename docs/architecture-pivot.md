@@ -4,6 +4,62 @@ Two decisions that replace the original REST-API-push approach.
 
 ---
 
+## Confirmed HubSpot Data Model
+
+Designed and provisioned by the HubSpot team in sandbox. Validated against the B2C mortgage
+journey end-to-end.
+
+### Objects and what lives where
+
+| Object | Type | Holds |
+|---|---|---|
+| **Contact** | Native | Identity, employer, addresses — the person |
+| **Lead** | Custom | Top of funnel; has its own pipeline |
+| **Deal** | Native | The opportunity; financials and liabilities |
+| **Application** | Custom | One per bank (APRO or Manual); bank-specific data |
+| **Property** | Custom | Property details |
+| **Bank** | Custom | Bank reference data |
+| **Offer** | Custom | TBD — not yet signed off |
+
+**Key rule:** no data duplicated across objects. Identity lives on Contact, financials on Deal,
+bank-specific data on Application.
+
+### Lead pipeline
+
+```
+New → In Progress → Not Eligible → Won → Lost
+```
+
+Ineligible leads go into **nurture** — they are NOT moved to Lost.
+A Lead converts to a Deal once the customer is **eligible and has created an account**.
+
+### Associations
+
+```
+Contact ──► Lead (top of funnel)
+Contact ──► Deal (one customer, potentially multiple opportunities)
+Deal    ──► Application (one per bank, APRO or Manual)
+Deal    ──► Property
+```
+
+### What's still being built (HubSpot team)
+
+- Offer object — decision pending
+- Remaining fields on Deal, Application, Property, Offer
+- Sensitive field flags
+- Record layouts
+- Automations: data sync, Lead→Deal conversion, routing
+- Data migration
+
+> ⚠️ **Known risk:** product field definitions are spread across many Figma files with no
+> single source of truth, and several flows are broken or out of date. Flagged to product team.
+> Field names in our payloads must be confirmed against the HubSpot team's field list before
+> building any sync logic.
+
+---
+
+---
+
 ## 1. HubSpot Workflow Webhook Triggers (pushing data into HubSpot)
 
 ### The idea
