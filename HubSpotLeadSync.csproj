@@ -8,7 +8,29 @@
     <AssemblyName>hubspot-lead-sync</AssemblyName>
   </PropertyGroup>
 
-  <!-- No external NuGet packages: only the .NET 8 + ASP.NET Core shared
-       frameworks. Easy to drop into a solution; nothing extra to keep patched. -->
+  <!-- Package versions mirror InstaMortgageService so this code lifts across cleanly.
+       Prypto.* come from the private GitHub feed in nuget.config. -->
+  <ItemGroup>
+    <!-- Persistence (EF Core + PostgreSQL) -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.3" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.3">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="9.0.3">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
+
+    <!-- Queue (Azure Service Bus + Prypco helpers) -->
+    <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.18.2" />
+    <PackageReference Include="Prypto.ServiceBusHelpers" Version="1.2.131" />
+
+    <!-- Auth to the Azure Function adapter via Managed Identity -->
+    <PackageReference Include="Azure.Identity" Version="1.13.1" />
+
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
 
 </Project>
