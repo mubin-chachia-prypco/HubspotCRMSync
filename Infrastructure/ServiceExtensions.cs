@@ -7,6 +7,7 @@ using Application.Services.Queue;
 using Infrastructure.Persistence;
 using Infrastructure.Persistence.Repositories;
 using Infrastructure.Services;
+using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -53,6 +54,16 @@ namespace Infrastructure
             // Outbound call to the adapter Function (typed HttpClient)
             services.AddHttpClient<IHubSpotAdapterClient, HubSpotAdapterClient>();
 
+            return services;
+        }
+
+        /// <summary>
+        /// Register MediatR command/query handlers, mirroring InstaMortgageService's AddCQRSHandlers.
+        /// Single project here, so the handlers live in this same assembly.
+        /// </summary>
+        public static IServiceCollection AddCQRSHandlers(this IServiceCollection services)
+        {
+            services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(typeof(ServiceExtensions).Assembly));
             return services;
         }
 
