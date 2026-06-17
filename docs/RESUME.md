@@ -1,60 +1,62 @@
 # Resume / Handoff Note
 
-Short, restart-friendly note so a fresh Claude Code session (or a teammate) can pick this up
-exactly where we left off. **Read this first, then `docs/forwarder-adapter-spec.md`.**
+Restart-friendly note so a fresh Claude Code session (or teammate) can pick this up. **Read this
+first, then `docs/forwarder-adapter-spec.md`.**
 
-_Last updated: 2026-06-17_
+_Last updated: 2026-06-17 (after the Azure pivot + Phase 1/2 build)_
 
----
-
-## Why you might be restarting
-
-To load the **HubSpotDev MCP** server. It was installed mid-session and is **not reachable in the
-session it was added to** — Claude Code only loads MCP servers at startup. **Restart Claude Code /
-reload the window**, then confirm it's connected before Phase 3 (below).
-
-**Confirm HubSpotDev is live:** run a tool search for it (e.g. ask for the HubSpot schema). If a
-`mcp__*hubspot*` tool resolves, you're good. If not, it isn't connected yet — check the MCP config.
+> ⚠️ **If you saw an older prompt mentioning a "Cloudflare Worker", `adapter-worker/`, a
+> "shared-secret gate", or "nothing is built yet, start at Phase 1" — that is OUTDATED.** The
+> adapter is an **Azure Function**, auth is **Managed Identity → Entra**, and **Phase 1 + 2 are
+> already built and committed.** This note is the current truth.
 
 ---
 
-## Where we are
+## Architecture (current, final)
 
-- **Plan is signed off.** Architecture, contract, phases: `docs/forwarder-adapter-spec.md`.
-- **Decisions (all locked):**
-  - Two-piece middleware: **.NET forwarder** (`HubspotCRMSync`, this repo) + **Cloudflare Worker
-    adapter** (`HubspotApps/adapter-worker/`, JS).
-  - In-HubSpot serverless **dropped** — no Content Hub Enterprise (tiers: Mktg Pro, **Sales Ent**,
-    Service Pro, **Data Ent**). Custom objects are fine.
-  - Generic **envelope** contract; **find-or-create** idempotency (no key store); **mapping lives
-    in the adapter**.
-- **Nothing built yet** — code work starts at Phase 1.
+```
+instamortgage / portal (C#)  ──Azure Service Bus──►  HubSpotConsumer (C#)  ──HTTPS + Managed Identity bearer──►  Azure Function adapter (Node/JS)  ──►  HubSpot
+   HubspotCRMSync (this repo) — CRM-AGNOSTIC producer                                       HubspotApps/hubspot-adapter-function — ALL HubSpot logic
+```
+
+- **.NET side = HubSpot-free producer.** Mirrors InstaMortgageService infra (EF Core 9 + Npgsql
+  Postgres + outbox; `Prypto.ServiceBusHelpers`). Will be absorbed into instamortgage.
+- **Adapter = Azure Function (Node, `@hubspot/api-client`).** The only HubSpot-aware code.
+- **Auth:** instamortgage's **managed identity** → token for the Function's Entra app (Easy Auth).
+  Not Kratos (that's user-facing only).
+- **Tier reality:** prod = Mktg Pro, **Sales Ent**, Service Pro, **Data Ent**, **no Content Hub** →
+  in-HubSpot serverless endpoint impossible; custom objects fine. (Confirmed from Products & Add-ons.)
+- **Contract:** generic envelope `{ idempotencyKey, objectType, operation, externalId, properties, associations, occurredAt }`. Idempotency = find-or-create + 409-as-success.
 - Background: memories `project-middleware-architecture` + `project-hubspot-data-model`; data model
-  on Miro board `uXjVHKrUyF0=`; portal flow in Figma `bXBtmUduPl32RLhKeVykVw` ("Full Scope – Flow
-  Diagram V4", node `8669:118459`).
+  on Miro `uXjVHKrUyF0=`; portal flow in Figma `bXBtmUduPl32RLhKeVykVw` ("Full Scope – Flow Diagram V4", node `8669:118459`).
 
-## What needs no restart (can build now)
+## What's BUILT (committed, NOT pushed)
 
-- **Phase 1 — Worker skeleton** (`HubspotApps/adapter-worker/`): wrangler + package + `index.js`;
-  shared-secret gate; envelope parse/validate; `contact` upsert by `externalId` (port Juan's fn).
-  Add `crm.objects.notes.write` to SyncApp `app-hsmeta.json` + reinstall.
-- **Phase 2 — Forwarder rewrite** (`HubspotCRMSync`): `POST /ingest` envelope ingress; worker POSTs
-  to the Worker; add `IDeadLetterQueue` + `IAdapterClient`; delete `HubSpot/HubSpotClient.cs` +
-  mapping in `Sync/LeadSyncService.cs`; config `Forwarder: { AdapterIngestUrl, IngestSharedSecret }`.
+- **HubspotCRMSync** branch `feat/servicebus-producer-azure-adapter`: producer + `/ingest`,
+  Service Bus producer + `HubSpotConsumer`, `AppDbContext`+outbox, `HubSpotAdapterClient` (MI bearer),
+  `ServiceExtensions`, `nuget.config`. Old PoC files deleted.
+- **HubspotApps** branch `feat/hubspot-adapter-function`: `hubspot-adapter-function/` (ingest +
+  envelope/mapping/resolve/notes) + `README.md` + `SETUP.md`. JS syntax-checked.
 
-## What is blocked until HubSpotDev MCP is connected
+## What's LEFT
 
-- **Phase 3 — Full mapping** (`mapping.js`, `resolve.js`): needs exact **custom-object type ids**
-  + **property names** from the live sandbox schema. Use HubSpotDev MCP (or `GET /crm/v3/schemas`)
-  to fill the TODOs. Don't guess these.
+1. **Phase 3 — fill the mapping** (`hubspot-adapter-function/src/lib/mapping.js`): custom-object
+   **type ids** + exact **property names** for **lead / application / offer / property**, from the
+   **live sandbox schema**. *Contact + deal are already mapped and working.* ← needs HubSpotDev MCP.
+2. **Build/run the .NET side:** GitHub Packages PAT (`read:packages`, SSO for Prypco) → `dotnet
+   restore`; create local Postgres `hubspot_sync`; `dotnet ef migrations add InitialOutbox` +
+   `database update`; run with `ASPNETCORE_ENVIRONMENT=local`.
+3. **Provision Azure** per `hubspot-adapter-function/SETUP.md` (Function App, Entra Easy Auth,
+   MI app-role, Key Vault `HUBSPOT_TOKEN`, networking, `hubspot-sync` queue).
+4. **Push branches + open PRs** (currently local only).
 
-## Waiting on Mubin (external)
-
-- Cloudflare account + secrets: `HUBSPOT_TOKEN`, `INGEST_SHARED_SECRET`, Worker route/domain.
-- Per-screen field lists with FE (or read each Figma frame on demand).
+## Confirm HubSpotDev MCP before Phase 3
+The reason for restarting was to load **HubSpotDev MCP**. Confirm it's live (resolve a HubSpot
+schema/tool). If yes → pull the live schema and fill `mapping.js` with real values, not TODOs.
+If it isn't connected, it won't appear mid-session — restart again.
 
 ## First moves on resume
-
-1. Confirm HubSpotDev MCP is connected (above).
-2. If yes → pull live schema, finish Phase 3 mapping. If still doing Phase 1/2 → start there (no MCP needed).
-3. Keep the .NET side free of any HubSpot property name / type id — those live only in the Worker.
+1. Confirm HubSpotDev MCP is connected.
+2. If yes → pull schema for lead/deal/application/offer/property → finish `mapping.js` (Phase 3).
+3. Then: build .NET (PAT + EF migration), provision Azure (SETUP.md), push + PRs.
+4. Keep the .NET side free of any HubSpot property name / type id — those live only in `mapping.js`.
