@@ -40,15 +40,22 @@ instamortgage / portal (C#)  ──Azure Service Bus──►  HubSpotConsumer (
 
 ## What's LEFT
 
-1. **Phase 3 — fill the mapping** (`hubspot-adapter-function/src/lib/mapping.js`): custom-object
-   **type ids** + exact **property names** for **lead / application / offer / property**, from the
-   **live sandbox schema**. *Contact + deal are already mapped and working.* ← needs HubSpotDev MCP.
-2. **Build/run the .NET side:** GitHub Packages PAT (`read:packages`, SSO for Prypco) → `dotnet
+1. **Phase 3 — fill the mapping** (`hubspot-adapter-function/src/lib/mapping.js`): *In progress.*
+   Done 2026-06-17 from live schema + Miro/Figma: application type id `2-203889439`, property
+   `2-203890683`; contact/deal/application/property field maps (deal+contact expanded from the
+   Affordability/Additional-Questions screens, flagged provisional). **Blocked:** lead (needs
+   `leads-read` scope), offer (no object exists), and `portal_*_id` resolve props missing — see
+   spec §7/§16. Live type ids + stage ids captured in the `project-hubspot-data-model` memory.
+2. **Build Phase 2.5 — Dubizzle lead intake** (spec §15): `inbound_leads` EF entity (UUIDv7
+   PK-as-token, jsonb payload, 60s TTL, one-time `consumed_at`) + `POST /intake/dubizzle`
+   (store-only, returns token) + `GET /intake/dubizzle/{token}` (redeem→prefill). Auth on the
+   inbound POST still TBD (proposed HMAC). Decisions locked; see §15/§16.
+3. **Build/run the .NET side:** GitHub Packages PAT (`read:packages`, SSO for Prypco) → `dotnet
    restore`; create local Postgres `hubspot_sync`; `dotnet ef migrations add InitialOutbox` +
    `database update`; run with `ASPNETCORE_ENVIRONMENT=local`.
-3. **Provision Azure** per `hubspot-adapter-function/SETUP.md` (Function App, Entra Easy Auth,
+4. **Provision Azure** per `hubspot-adapter-function/SETUP.md` (Function App, Entra Easy Auth,
    MI app-role, Key Vault `HUBSPOT_TOKEN`, networking, `hubspot-sync` queue).
-4. **Push branches + open PRs** (currently local only).
+5. **Push branches + open PRs** (currently local only).
 
 ## Confirm HubSpotDev MCP before Phase 3
 The reason for restarting was to load **HubSpotDev MCP**. Confirm it's live (resolve a HubSpot

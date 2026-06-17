@@ -158,7 +158,10 @@ HubspotApps/adapter-worker/
 1. **Auth the caller** — reject unless the request carries `INGEST_SHARED_SECRET`. The Worker URL
    is public; this is the gate. `401` otherwise.
 2. **Validate** the envelope; `400` on bad shape.
-3. **Resolve** by `externalId`'s unique property → update; else create. 409 = idempotent success.
+3. **Resolve** the target record (§16): a **Contact** on first touch by the identity chain
+   `partner_lead_ref` → `email` → `phone`; otherwise (and on every later page) by the object's stable
+   `externalId` prop → update; else create. 409 = idempotent success. Leads/Deals are not
+   person-deduped (multiple per Contact; co-applicant — §16).
 4. **Map** portal `properties` → HubSpot property names per `objectType` (§7). Custom objects
    (Application/Offer/Property) use their **object type id**, not a name.
 5. **Diff & note** (carry-over of the original task): on update, fetch current values, diff vs.
@@ -178,7 +181,11 @@ reinstall, not just rotation — `HUBSPOT_PROJECTS.md`).
 
 ---
 
-## 7. Data model (Miro — source of truth)
+## 7. Data model
+
+> **Source of truth = the live HubSpot sandbox** (decided 2026-06-17). Miro is the *design reference*;
+> where the two differ, the sandbox wins and the gap is logged in §7a. `mapping.js` is filled from the
+> sandbox, never from Miro field names.
 
 | Portal `objectType` | HubSpot type | Resolve key (unique prop) | Notes |
 |---|---|---|---|
@@ -195,9 +202,37 @@ Pipelines (for stage maps in `mapping.js`):
 - **Deal:** New → Offer Selection → Docs Collection → Credit Review → Bank Submission → Pre-Approved → Valuation → FOL → Disbursal → Property Transfer → Closed Won / Closed Lost.
 - **Application:** New → Document Collection → Credit Review → Form Filling → Bank Submission → Pre-Approved (Won) / Rejected (Lost); **APRO fast-path** skips manual stages.
 
-> **Exact field lists + custom-object type ids are NOT yet captured.** Fill `mapping.js` from the
-> **live sandbox schema** (`GET /crm/v3/schemas`, or the HubSpotDev MCP once it's connected in a
-> fresh session). Marked TODO until then.
+> **Custom-object type ids captured 2026-06-17** (application `2-203889439`, property `2-203890683`)
+> from the live sandbox (`GET /crm/v3/schemas`, portal 148631333). Field maps written for
+> contact/deal/application/property; lead/offer still blocked. See §7a for where live drifts from this
+> Miro model.
+
+---
+
+## 7a. Live sandbox vs designed model (drift log)
+
+Snapshot 2026-06-17. **Live** = CRM API (authoritative) except **Lead** (unread — Private App lacks
+`leads-read`) and **Bank/Company** (not pulled). **Miro** = board data-model doc + Object Map ERD.
+
+| Object | Miro (designed) | Live (sandbox) | Drift |
+|---|---|---|---|
+| Contact | full_name, date_of_birth, nationality, email, phone; **email + phone unique** | + custom `employment_type`, `residency_status`, `portal_customer_id`, `lead_source`, `years_in_business`; **only email unique** | `residency_status` not `nationality`; **phone NOT unique**; no `contact_type`/role for bank contacts |
+| Lead | object w/ `monthly_salary`, `other_income`, `monthly_debts`, `credit_card_limit`, eligibility | standard Leads object + pipeline; **fields unreadable**; financials appear on **Deal** | Can't confirm Lead fields; affordability likely lives on Deal, not Lead |
+| Deal | stage, applicant_type, borrowing_amount | **32 custom props**: full `has_*`/`num_*` liabilities, `monthly_salary`, `borrowing_amount`, `loan_term`, `total_credit_limit`, `monthly_non_banking_borrowing`, `apro_verification_status`, `partner_lead_ref`, snapshots | Live Deal absorbed Miro's *Lead* financials **+** a liabilities block Miro doesn't show |
+| Application (`2-203889439`) | stage, substage, path | `application_name`, `application_path`[apro,manual] **+ dup** `path`[APRO,Manual], `bank`, `substatus` | **duplicate path field**; `substage`→`substatus` |
+| Property (`2-203890683`) | community, type, price, status | `property_name`, `community`, `price`, `property_type`, `status` | matches; live adds `property_name` |
+| Offer | custom object: rate, term, type | **does not exist** | whole object missing |
+| Bank | Company w/ `apro_enabled` | not pulled | unverified |
+| Bank Contact | Contact w/ `contact_type=Bank`, role | no such props on Contact | missing live |
+| Document | native (MVP) | no custom object | consistent |
+
+**Deal pipeline:** Miro 12 stages → live "Mortgage" (`3878730980`) **9 stages**, collapsing Offer
+Selection / Docs Collection / Credit Review / Bank Submission into one **Qualifying** stage.
+Application Manual/APRO pipelines match.
+
+**Field-name drift (financials):** `monthly_debts`→`monthly_non_banking_borrowing`/`existing_liabilities_total`;
+`credit_card_limit`→`total_credit_limit`; `other_income`→ no direct prop (split across
+`annual_bonus`/`annual_commission`/`annual_rent_receivables`).
 
 ---
 
@@ -273,8 +308,12 @@ this is the screen→object routing:
   `wrangler dev` locally. Add `crm.objects.notes.write` to SyncApp + reinstall.
 - **Phase 2 — Forwarder rewrite.** `/ingest` envelope ingress; worker POSTs to the Worker;
   `IDeadLetterQueue`; strip HubSpot code; config; update README/docs.
+- **Phase 2.5 — Dubizzle lead intake (§15).** `inbound_leads` table (UUIDv7 PK-as-token, jsonb
+  payload); `POST /intake/dubizzle` (store-only, returns token) + `GET /intake/dubizzle/{token}`
+  (one-time, 60s TTL → prefill). No HubSpot write on intake.
 - **Phase 3 — Full mapping.** `mapping.js` + `resolve.js` for lead/deal/application/offer/property
-  from live schema; associations; stage maps (§7/§8).
+  from live schema; associations; stage maps (§7/§8). *(Partial: contact/deal mapped; application &
+  property type ids filled 2026-06-17; lead/offer blocked — see §7.)*
 - **Phase 4 — Activity logging.** `notes.js` diff→note (the original task).
 - **Phase 5 — Hardening.** DLQ replay, logging/observability, tests (incl. duplicate-note check),
   optional HMAC + idempotency dedupe.
@@ -286,3 +325,117 @@ this is the screen→object routing:
 `hubspot-integration-plan.md`, `README.md`, `hubspot-app-and-auth-setup.md` describe the external
 .NET service doing all HubSpot work (plus already-removed webhook/mirror code, `5f1d72c`). They'll
 be updated to point at this forwarder + Worker-adapter split once Phase 1–2 land.
+
+---
+
+## 15. Dubizzle / Bayut lead intake (top-of-funnel entry → token → prefill)
+
+**Status:** designed, not built · **Decided:** 2026-06-17 (from the Dubizzle email thread w/ Jonathon Padron)
+
+Dubizzle is the primary top-of-funnel entry. When a user submits the Dubizzle lead form, **their
+Lambda posts the lead twice**:
+1. To **their own CRM** — which syncs to our HubSpot via the existing CRM integration (this is where
+   their dedup / sync-error retention lives). *Not our concern here.*
+2. **Directly to us** — we store it and return a **one-time token**. Dubizzle redirects the user to a
+   PRYPCO URL with that token in the query string; our FE redeems it to **prefill the affordability
+   calculator**.
+
+```
+  Dubizzle form ─► Dubizzle Lambda ─┬─► Dubizzle CRM ─► (existing) ─► our HubSpot
+                                    │
+                                    └─► POST /intake/dubizzle ─► inbound_leads (store only)
+                                            ◄── { token = UUIDv7 } ──┘
+  User ─► redirect to prypco.com/...?token=<uuidv7>
+  FE   ─► GET /intake/dubizzle/{token} ─► payload ─► prefill calculator (token burned, 60s TTL)
+```
+
+### Decisions (locked)
+- **UUIDv7 as the primary key AND the URL token.** Time-ordered ⇒ sortable / index-friendly; ~74
+  random bits ⇒ not enumerable (avoids the IDOR risk a sequential id would create in a public URL).
+  `.NET 9 Guid.CreateVersion7()`, stored as Postgres `uuid`. **We mint it server-side on insert —
+  Dubizzle never sends an id; the token in our response IS this id**, which Dubizzle echoes into the
+  redirect URL and FE hands back on redeem.
+- **We do not care about Dubizzle's payload schema.** The lead is stored as an **opaque `jsonb` blob**
+  and returned verbatim on redeem — the .NET side never validates or maps their field names (keeps the
+  producer "dumb"). FE is the only thing that reads inside the blob, to prefill the calculator.
+- **Store-only on intake.** No HubSpot write. Dubizzle sends a copy for *every* lead regardless of
+  click-through; auto-pushing all of them to HubSpot would pollute the funnel. The HubSpot Lead/Deal
+  is created later via the normal envelope → adapter path **when the user actually engages** with the
+  calculator. (The HubSpot copy for non-engaging leads still arrives via path #1, Dubizzle's CRM.)
+- **One-time + ~60s TTL.** Redeem returns the payload iff `expires_at > now() AND consumed_at IS NULL`,
+  then stamps `consumed_at`; otherwise `410 Gone`. Matches Jonathon's "on failure, error out and let
+  the user fill the next page manually" — no elaborate resend. A Dubizzle resend just inserts a new
+  row with a fresh token; dedup is Dubizzle's CRM responsibility, not ours.
+
+### Table (`inbound_leads`) — new EF entity + config alongside the outbox
+| column | type | notes |
+|---|---|---|
+| `id` | `uuid` (v7) | PK; also the URL token |
+| `source` | `text` | `'dubizzle'` (room for `'bayut'`, etc.) |
+| `payload` | `jsonb` | raw lead as received; schema-flexible |
+| `created_at` | `timestamptz` | |
+| `expires_at` | `timestamptz` | `created_at + ~60s` |
+| `consumed_at` | `timestamptz?` | set on first successful redeem (one-time) |
+
+### Endpoints (on the .NET producer, mirroring the `/ingest` minimal-API style)
+- `POST /intake/dubizzle` — Dubizzle Lambda → us. Insert row, return `{ token }`. **Auth (open):
+  proposed HMAC-signed body w/ shared secret** (same spirit as the old webhook v3 scheme);
+  alternatives = API key header or Lambda IP allowlist. Confirm with Dubizzle.
+- `GET /intake/dubizzle/{token}` — FE → us. Returns the stored payload (or `410`); burns the token.
+  Gated by the token itself (FE is unauthenticated at landing); consider returning only the
+  prefill-relevant fields.
+
+### Link to external id (see §16)
+`inbound_leads.id` is the natural **stable `externalId` / `portal_lead_id`** we carry forward: the
+first real upsert (when the user engages) sends the envelope keyed by this id, and stores Dubizzle's
+own lead reference as `partner_lead_ref` (attribution, never the resolve key).
+
+### Open items
+1. **Auth mechanism** on the inbound POST (HMAC vs API key vs IP allowlist) — confirm with Dubizzle.
+   *(This is the only thing we need from them — not their payload shape.)*
+
+> Dubizzle's payload schema and which fields prefill the calculator are **FE concerns, not ours** —
+> our side stores/returns the blob opaquely. No action needed here.
+
+---
+
+## 16. External id & idempotency (how upsert stays "update, not duplicate")
+
+**Decided:** 2026-06-17.
+
+Two concerns, kept separate: **(a) identity dedup** — is this the same person/record we already have?
+and **(b) a stable per-record handle** — so every later page hits that exact record, idempotently.
+
+**Contact identity — precedence chain (cold start).** On the **first** Contact upsert the Function
+resolves by `partner_lead_ref` (Bayut ref) → `email` → `phone`; first hit wins (found → update +
+backfill the missing identifiers; none → create). **Universal, not Bayut-specific** — organic leads
+(no ref) fall through to email → phone, so the same logic also covers leads that never touched the
+Dubizzle flow. One person ⇒ one Contact. Lives in `resolve.js` (it must query the CRM to search each
+key); the .NET producer just passes whatever identifiers it has in the envelope.
+
+**After first input — resolve by the stable id (warm path).** Once an object exists we carry its
+stable id, and **every subsequent page resolves that record directly by id** — exact match, no
+precedence search, no create race. The carried id is **our own** portal id (`portal_customer_id`,
+`portal_lead_id`, `opportunity_id`, `portal_application_id`, `portal_property_id`), minted by us and
+written to a unique HubSpot prop — **NOT** HubSpot's internal record id, so FE and the producer stay
+CRM-agnostic. (The Function also returns HubSpot's record id in its `{ok, action, id}` response —
+fine as an internal fast-path, but not what FE carries.) Net: **precedence chain = cold-start dedup;
+stable id = the handle for everything after.**
+
+**Leads/Deals — multiple per Contact (NOT person-deduped).** Co-applicant support is coming: a person
+may be applicant on one and co-applicant on another, and Contact↔Deal is many-to-many with
+applicant/co-applicant labels (§7). So Leads/Deals are never collapsed by person identity; each keeps
+its own minted id so a repeat send updates *that* record without merging distinct leads. Bayut's ref
+is stored as `partner_lead_ref` (identity key #1 **and** attribution). The §15 intake token stays
+ephemeral — never an identity key.
+
+**Affordability placement (open).** Pre-conversion these edits target the **Lead** (calculator is a
+Lead-stage activity, §8); post-conversion the **Deal**. ⚠️ In the live schema the financials sit on
+**Deal** while Miro models them on Lead — settle the Lead-vs-Deal placement with FE + the HubSpot team.
+
+**Uniqueness (blocker).** Idempotent *create* is only race-free if the resolve prop is UNIQUE in
+HubSpot. Current: `portal_customer_id` / `opportunity_id` exist but **non-unique**;
+`portal_application_id` / `portal_property_id` **don't exist**; `portal_lead_id` unverified (no
+`leads-read`). `resolve.js` does search-then-create meanwhile (race window on first create only —
+the warm path above already avoids it for everything after). Fix = add the missing `portal_*_id`
+props + set `hasUniqueValue=true` (then create-conflict 409 = idempotent success).

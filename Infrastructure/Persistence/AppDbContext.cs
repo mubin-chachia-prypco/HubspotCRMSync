@@ -1,3 +1,4 @@
+using Domain.Entities.InboundLeads;
 using Domain.Entities.Outbox;
 using Microsoft.EntityFrameworkCore;
 
@@ -15,6 +16,9 @@ namespace Infrastructure.Persistence
         }
 
         public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+
+        /// <summary>Partner (Dubizzle/Bayut) intake leads — store-and-redeem prefill cache (spec §15).</summary>
+        public DbSet<InboundLead> InboundLeads => Set<InboundLead>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

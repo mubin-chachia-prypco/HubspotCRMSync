@@ -42,6 +42,7 @@ namespace Infrastructure
         public static IServiceCollection AddHubSpotSyncServices(this IServiceCollection services)
         {
             services.AddScoped<IOutboxRepository, OutboxRepository>();
+            services.AddScoped<IInboundLeadRepository, InboundLeadRepository>();
 
             // Service Bus helpers (Prypto)
             services.AddSingleton<IQueueCheckService, QueueCheckService>();

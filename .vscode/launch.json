@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "HubSpot Lead Sync",
+      "name": "Run producer (local)",
       "type": "coreclr",
       "request": "launch",
       "preLaunchTask": "build",
@@ -11,7 +11,7 @@
       "cwd": "${workspaceFolder}",
       "stopAtEntry": false,
       "env": {
-        "ASPNETCORE_ENVIRONMENT": "Development",
+        "ASPNETCORE_ENVIRONMENT": "local",
         "ASPNETCORE_URLS": "http://localhost:5080"
       },
       "console": "internalConsole"
