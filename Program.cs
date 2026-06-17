@@ -42,10 +42,10 @@ app.MapPost("/intake/dubizzle", async (HttpRequest req, IInboundLeadRepository l
     if (string.IsNullOrWhiteSpace(raw))
         return Results.BadRequest(new { error = "empty body" });
 
-    // Optional auth: enforced only when a secret is configured (so local dev needs none). Proposed
-    // mechanism is HMAC-SHA256 over the raw body in the X-Signature header — confirm with Dubizzle.
-    var secret = config["Intake:Dubizzle:HmacSecret"];
-    if (!string.IsNullOrEmpty(secret) && !IntakeAuth.IsValidHmac(req, raw, secret))
+    // Auth: a static Bearer token Dubizzle sends in the Authorization header, stored in our secrets
+    // (Key Vault in prod). Enforced only when configured, so local dev needs none.
+    var bearer = config["Intake:Dubizzle:BearerToken"];
+    if (!string.IsNullOrEmpty(bearer) && !IntakeAuth.IsValidBearer(req, bearer))
         return Results.Unauthorized();
 
     // We store the payload as jsonb — reject anything that isn't valid JSON.
@@ -70,18 +70,19 @@ app.Services.RegisterMessageConsumers();
 
 app.Run();
 
-/// <summary>Optional HMAC verification for the partner intake POST (spec §15 / §10).</summary>
+/// <summary>Bearer-token check for the partner intake POST (spec §15 / §10).</summary>
 static class IntakeAuth
 {
-    public static bool IsValidHmac(HttpRequest req, string rawBody, string secret)
+    public static bool IsValidBearer(HttpRequest req, string expected)
     {
-        if (!req.Headers.TryGetValue("X-Signature", out var provided)) return false;
+        if (!req.Headers.TryGetValue("Authorization", out var header)) return false;
 
-        var computed = Convert.ToHexString(
-            new HMACSHA256(Encoding.UTF8.GetBytes(secret)).ComputeHash(Encoding.UTF8.GetBytes(rawBody)));
+        const string prefix = "Bearer ";
+        var value = header.ToString();
+        if (!value.StartsWith(prefix, StringComparison.Ordinal)) return false;
 
-        var a = Encoding.UTF8.GetBytes(computed);
-        var b = Encoding.UTF8.GetBytes(provided.ToString());
+        var a = Encoding.UTF8.GetBytes(value[prefix.Length..].Trim());
+        var b = Encoding.UTF8.GetBytes(expected);
         return a.Length == b.Length && CryptographicOperations.FixedTimeEquals(a, b);
     }
 }

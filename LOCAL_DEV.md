@@ -75,10 +75,10 @@ curl -i localhost:5080/intake/dubizzle/$TOKEN
 | `ConnectionStrings:HubSpotSyncConnection` | Postgres | localhost default |
 | `ServiceBusSettings:ConnectionString` | Azure Service Bus | placeholder; only used by the consumer (non-local) |
 | `HubSpotSyncSettings:AdapterIngestUrl` / `AdapterScope` | adapter URL + MI token scope | placeholder; cloud only |
-| `Intake:Dubizzle:HmacSecret` | optional HMAC gate on `POST /intake/dubizzle` | **empty = no auth** (set to require `X-Signature`) |
+| `Intake:Dubizzle:BearerToken` | Bearer token for `POST /intake/dubizzle` | **empty = no auth** (set to require `Authorization: Bearer …`) |
 
 ## Notes / not-yet
 - **Service Bus + the adapter call are cloud-path** — locally the consumer is off. End-to-end
   (producer→queue→Function→HubSpot) needs Azure provisioning (see the adapter's `SETUP.md`).
-- Inbound POST **auth is optional/off by default** — proposed mechanism is HMAC over the raw body
-  (`X-Signature`), pending confirmation with Dubizzle.
+- Inbound POST **auth is optional/off by default** — a static **Bearer token** (`Authorization:
+  Bearer …`) checked only when `Intake:Dubizzle:BearerToken` is set (Key Vault in prod).

@@ -234,6 +234,12 @@ Application Manual/APRO pipelines match.
 `credit_card_limit`→`total_credit_limit`; `other_income`→ no direct prop (split across
 `annual_bonus`/`annual_commission`/`annual_rent_receivables`).
 
+**Lead is a standard object, not a custom one.** It already exists in the sandbox with the Miro
+pipeline (New → In Progress → Won / Not Eligible / Lost), so there is **nothing to create** — the only
+action is granting the Private App `leads-read`/`leads-write` + reinstall to read/write it. `mapping.js`
+already targets it (`lead → 'leads'`). The **Lead → Deal conversion is a HubSpot workflow** (HubSpot
+team owns workflows), not the adapter's job — we upsert the Lead, then later the Deal.
+
 ---
 
 ## 8. Customer journey → object → payload (Figma: "Full Scope – Flow Diagram V4")
@@ -378,21 +384,23 @@ Lambda posts the lead twice**:
 | `consumed_at` | `timestamptz?` | set on first successful redeem (one-time) |
 
 ### Endpoints (on the .NET producer, mirroring the `/ingest` minimal-API style)
-- `POST /intake/dubizzle` — Dubizzle Lambda → us. Insert row, return `{ token }`. **Auth (open):
-  proposed HMAC-signed body w/ shared secret** (same spirit as the old webhook v3 scheme);
-  alternatives = API key header or Lambda IP allowlist. Confirm with Dubizzle.
+- `POST /intake/dubizzle` — Dubizzle Lambda → us. Insert row, return `{ token }`. **Auth: a static
+  Bearer token** Dubizzle sends in the `Authorization: Bearer …` header, held in our secrets (Key
+  Vault in prod). Validated only when configured (`Intake:Dubizzle:BearerToken`), so local dev needs
+  none. **Decided 2026-06-17 — bearer token, not HMAC.**
 - `GET /intake/dubizzle/{token}` — FE → us. Returns the stored payload (or `410`); burns the token.
   Gated by the token itself (FE is unauthenticated at landing); consider returning only the
   prefill-relevant fields.
 
 ### Link to external id (see §16)
-`inbound_leads.id` is the natural **stable `externalId` / `portal_lead_id`** we carry forward: the
-first real upsert (when the user engages) sends the envelope keyed by this id, and stores Dubizzle's
-own lead reference as `partner_lead_ref` (attribution, never the resolve key).
+The intake token is **per-visit and ephemeral** — a returning customer gets a *new* `inbound_leads.id`
+each time, so it is NOT the durable identity. When the user engages, the first real upsert resolves the
+Contact via the identity chain (§16) and carries our own stable portal id; Dubizzle's lead reference is
+stored as `partner_lead_ref` (identity key + attribution, never the token).
 
 ### Open items
-1. **Auth mechanism** on the inbound POST (HMAC vs API key vs IP allowlist) — confirm with Dubizzle.
-   *(This is the only thing we need from them — not their payload shape.)*
+1. **Inbound Bearer token value + rotation** — agree the token string with Dubizzle and store it in
+   our Key Vault (`Intake:Dubizzle:BearerToken`). *(The only thing we need from them — not their payload shape.)*
 
 > Dubizzle's payload schema and which fields prefill the calculator are **FE concerns, not ours** —
 > our side stores/returns the blob opaquely. No action needed here.
