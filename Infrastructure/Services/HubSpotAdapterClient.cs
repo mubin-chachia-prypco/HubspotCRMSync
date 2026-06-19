@@ -1,27 +1,25 @@
-using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Application.IServices;
 using Application.Messages;
 using Application.Options;
-using Azure.Core;
-using Azure.Identity;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Infrastructure.Services
 {
     /// <summary>
-    /// Posts the generic envelope to the HubSpot adapter Function, authenticating with the app's
-    /// Managed Identity (the same DefaultAzureCredential pattern InstaMortgageService uses for
-    /// Key Vault). The Function is protected by Entra "Easy Auth"; we present a bearer token for
-    /// its App ID URI scope. If no scope is configured (e.g. local dev) the call goes unauthenticated.
+    /// Posts the generic envelope to the HubSpot adapter API (TypeScript + Fastify, on Kubernetes).
+    /// Authenticates with the shared service token, sent as the <c>X-AI-Agent-Key</c> header — the
+    /// service-to-service path the adapter accepts (it also accepts an Ory session, but that's for
+    /// user-facing callers). An empty token means no auth header (e.g. local dev).
     /// </summary>
     public class HubSpotAdapterClient : IHubSpotAdapterClient
     {
+        private const string ServiceTokenHeader = "X-AI-Agent-Key";
+
         private readonly HttpClient _http;
         private readonly ILogger<HubSpotAdapterClient> _logger;
         private readonly HubSpotSyncSettings _settings;
-        private readonly TokenCredential _credential;
 
         public HubSpotAdapterClient(
             HttpClient http,
@@ -31,8 +29,6 @@ namespace Infrastructure.Services
             _http = http;
             _logger = logger;
             _settings = settings.CurrentValue;
-            // DefaultAzureCredential resolves the Managed Identity in Azure and your dev login locally.
-            _credential = new DefaultAzureCredential();
         }
 
         public async Task<bool> SendAsync(HubSpotSyncMessage message, CancellationToken cancellationToken)
@@ -42,12 +38,8 @@ namespace Infrastructure.Services
                 Content = JsonContent.Create(message)
             };
 
-            if (!string.IsNullOrWhiteSpace(_settings.AdapterScope))
-            {
-                var token = await _credential.GetTokenAsync(
-                    new TokenRequestContext(new[] { _settings.AdapterScope }), cancellationToken);
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
-            }
+            if (!string.IsNullOrWhiteSpace(_settings.AdapterServiceToken))
+                request.Headers.Add(ServiceTokenHeader, _settings.AdapterServiceToken);
 
             using var response = await _http.SendAsync(request, cancellationToken);
             if (response.IsSuccessStatusCode)

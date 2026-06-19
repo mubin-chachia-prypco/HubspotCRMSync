@@ -74,7 +74,8 @@ curl -i localhost:5080/intake/dubizzle/$TOKEN
 |---|---|---|
 | `ConnectionStrings:HubSpotSyncConnection` | Postgres | localhost default |
 | `ServiceBusSettings:ConnectionString` | Azure Service Bus | placeholder; only used by the consumer (non-local) |
-| `HubSpotSyncSettings:AdapterIngestUrl` / `AdapterScope` | adapter URL + MI token scope | placeholder; cloud only |
+| `HubSpotSyncSettings:AdapterIngestUrl` | adapter API URL (k8s service, path `/api/ingest`) | placeholder; cloud only |
+| `HubSpotSyncSettings:AdapterServiceToken` | service token sent as `X-AI-Agent-Key` to the adapter | empty locally; secret in prod |
 | `Intake:Dubizzle:BearerToken` | Bearer token for `POST /intake/dubizzle` | **empty = no auth** (set to require `Authorization: Bearer …`) |
 
 ## Notes / not-yet
