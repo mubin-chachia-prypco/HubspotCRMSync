@@ -15,15 +15,17 @@ _Last updated: 2026-06-17 (after the Azure pivot + Phase 1/2 build)_
 ## Architecture (current, final)
 
 ```
-instamortgage / portal (C#)  ──Azure Service Bus──►  HubSpotConsumer (C#)  ──HTTPS + Managed Identity bearer──►  Azure Function adapter (Node/JS)  ──►  HubSpot
-   HubspotCRMSync (this repo) — CRM-AGNOSTIC producer                                       HubspotApps/hubspot-adapter-function — ALL HubSpot logic
+instamortgage / portal (C#)  ──Azure Service Bus──►  HubSpotConsumer (C#)  ──HTTPS + X-AI-Agent-Key──►  hubspot-adapter (TS+Fastify on k8s)  ──►  HubSpot
+   HubspotCRMSync (this repo) — CRM-AGNOSTIC producer (CQRS/MediatR)                          HubspotApps/hubspot-adapter — ALL HubSpot logic, stateless
 ```
 
-- **.NET side = HubSpot-free producer.** Mirrors InstaMortgageService infra (EF Core 9 + Npgsql
-  Postgres + outbox; `Prypto.ServiceBusHelpers`). Will be absorbed into instamortgage.
-- **Adapter = Azure Function (Node, `@hubspot/api-client`).** The only HubSpot-aware code.
-- **Auth:** instamortgage's **managed identity** → token for the Function's Entra app (Easy Auth).
-  Not Kratos (that's user-facing only).
+- **.NET side = HubSpot-free producer.** Mirrors InstaMortgageService (EF Core 9 + Npgsql + outbox;
+  `Prypto.ServiceBusHelpers`; **CQRS/MediatR**). Absorbed into instamortgage.
+- **Adapter = TypeScript + Fastify container on Kubernetes** (`@hubspot/api-client`), structured like
+  the Python services (document-collection). Stateless — just map + forward. The only HubSpot-aware code.
+- **Auth (adapter):** accept **either** a **service token** (`X-AI-Agent-Key`, what the producer sends)
+  **or** an **Ory session** (forwarded to the shared UserService `/Auth`). NOT Managed Identity/Easy Auth.
+  ⚠️ Producer's `HubSpotAdapterClient` still uses the old MI bearer — needs switching to `X-AI-Agent-Key`.
 - **Tier reality:** prod = Mktg Pro, **Sales Ent**, Service Pro, **Data Ent**, **no Content Hub** →
   in-HubSpot serverless endpoint impossible; custom objects fine. (Confirmed from Products & Add-ons.)
 - **Contract:** generic envelope `{ idempotencyKey, objectType, operation, externalId, properties, associations, occurredAt }`. Idempotency = find-or-create + 409-as-success.

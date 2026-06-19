@@ -1,16 +1,20 @@
-# Middleware Spec — .NET Producer + Azure Function Adapter (JS)
+# Middleware Spec — .NET Producer + Node/TypeScript Adapter API (on Kubernetes)
 
-**Status:** Building · **Updated:** 2026-06-17
-**Supersedes:** the "external .NET service does all HubSpot work" model and the earlier
-"in-HubSpot serverless adapter" idea (blocked — see §2).
+**Status:** Building · **Updated:** 2026-06-19
+**Supersedes:** the "external .NET service does all HubSpot work" model, the "in-HubSpot serverless
+adapter" idea (blocked — §2), and the interim "Azure Function adapter" design (re-platformed — see below).
 
-> **FINAL SHAPE (2026-06-17) — read this first.** The adapter is an **Azure Function (Node.js)**,
-> **not** a Cloudflare Worker. The company runs on Azure (instamortgage uses Blob/Service Bus +
-> Key Vault via a managed identity), so the adapter lives on Azure — no new vendor for a ~1-year
-> tool. Auth from the .NET side is the **managed identity → Entra "Easy Auth"** bearer (no shared
-> secret). The .NET side mirrors instamortgage infra (EF Core/Npgsql + `Prypto.ServiceBusHelpers`)
-> and will be absorbed into instamortgage. Where this doc says "Cloudflare Worker" below, read
-> "Azure Function." Implementation: `HubspotApps/hubspot-adapter-function/` (+ its `SETUP.md`).
+> **FINAL SHAPE (2026-06-19) — read this first.** The adapter is a **stateless TypeScript + Fastify
+> HTTP API, containerised and run on our Kubernetes cluster** (alongside the Python services), **not**
+> an Azure Function and **not** a Cloudflare Worker. It's structured like `document-collection`:
+> Dockerfile (non-root, `VERSION`→`/app/.image-version`, `/health` HEALTHCHECK, port 8000),
+> `GET /health` + `GET /version`, OpenAPI at `/openapi.json` + `/docs` + `/swagger/v1/swagger.json`.
+> **Auth: accept EITHER a service token (`X-AI-Agent-Key`) OR an Ory session** (forwarded to
+> `USER_SERVICE_BASE_URL/Auth`, the shared UserService bridge) — **not** Managed Identity / Easy Auth.
+> The producer calls it with the service token. No DB (just map + forward). The .NET producer still
+> mirrors instamortgage infra (EF Core/Npgsql + `Prypto.ServiceBusHelpers`) and is absorbed into
+> instamortgage. Where this doc says "Azure Function" or "Cloudflare Worker" below, read
+> "Node/TS adapter API". Implementation: `HubspotApps/hubspot-adapter/` (+ its `SETUP.md`/`LOCAL_DEV.md`).
 
 Single source of truth for the new two-piece middleware. Read §1–§4 first.
 
