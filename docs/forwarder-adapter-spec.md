@@ -14,7 +14,8 @@ adapter" idea (blocked — §2), and the interim "Azure Function adapter" design
 > The producer calls it with the service token. No DB (just map + forward). The .NET producer still
 > mirrors instamortgage infra (EF Core/Npgsql + `Prypto.ServiceBusHelpers`) and is absorbed into
 > instamortgage. Where this doc says "Azure Function" or "Cloudflare Worker" below, read
-> "Node/TS adapter API". Implementation: `HubspotApps/hubspot-adapter/` (+ its `SETUP.md`/`LOCAL_DEV.md`).
+> "Node/TS adapter API". Implementation: its **own repo `Prypco/hubspot-adapter`** (cloned at
+> `Projects/hubspot-adapter`; + its `SETUP.md`/`LOCAL_DEV.md`). (Moved out of `HubspotApps` 2026-06-19.)
 
 Single source of truth for the new two-piece middleware. Read §1–§4 first.
 
@@ -292,9 +293,10 @@ this is the screen→object routing:
 
 - **`HubspotCRMSync`** (.NET) — the forwarder. Strips HubSpot code; gains `/ingest`, `IAdapterClient`,
   `IDeadLetterQueue`. Docs updated here.
-- **`HubspotApps`** — the HubSpot-specific home:
-  - `TestCRMSync/` — the SyncApp HubSpot project (token/scope issuer; add notes scope + reinstall).
-  - `adapter-worker/` — **new** Cloudflare Worker (the adapter); Wrangler deploy.
+- **`Prypco/hubspot-adapter`** (own repo, cloned at `Projects/hubspot-adapter`) — the adapter:
+  TS + Fastify API, containerised on k8s (`/api/ingest`, mapping/resolve/notes). The only HubSpot-aware code.
+- **`HubspotApps`** — now only the **SyncApp HubSpot project** (`TestCRMSync/`): the HubSpot CLI project
+  that issues the Private App token/scopes (add notes scope + reinstall). The adapter no longer lives here.
 
 ---
 

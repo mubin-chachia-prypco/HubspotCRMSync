@@ -16,7 +16,7 @@ _Last updated: 2026-06-17 (after the Azure pivot + Phase 1/2 build)_
 
 ```
 instamortgage / portal (C#)  ──Azure Service Bus──►  HubSpotConsumer (C#)  ──HTTPS + X-AI-Agent-Key──►  hubspot-adapter (TS+Fastify on k8s)  ──►  HubSpot
-   HubspotCRMSync (this repo) — CRM-AGNOSTIC producer (CQRS/MediatR)                          HubspotApps/hubspot-adapter — ALL HubSpot logic, stateless
+   HubspotCRMSync (this repo) — CRM-AGNOSTIC producer (CQRS/MediatR)                          Prypco/hubspot-adapter (own repo) — ALL HubSpot logic, stateless
 ```
 
 - **.NET side = HubSpot-free producer.** Mirrors InstaMortgageService (EF Core 9 + Npgsql + outbox;
@@ -37,12 +37,13 @@ instamortgage / portal (C#)  ──Azure Service Bus──►  HubSpotConsumer (
 - **HubspotCRMSync** branch `feat/servicebus-producer-azure-adapter`: producer + `/ingest`,
   Service Bus producer + `HubSpotConsumer`, `AppDbContext`+outbox, `HubSpotAdapterClient` (MI bearer),
   `ServiceExtensions`, `nuget.config`. Old PoC files deleted.
-- **HubspotApps** branch `feat/hubspot-adapter-function`: `hubspot-adapter-function/` (ingest +
-  envelope/mapping/resolve/notes) + `README.md` + `SETUP.md`. JS syntax-checked.
+- **Adapter** now in its own repo **`Prypco/hubspot-adapter`** (cloned at `Projects/hubspot-adapter`,
+  branch `dev`): TypeScript + Fastify API (`/api/ingest`, envelope/mapping/resolve/notes), Dockerfile,
+  `/health` + `/version` + OpenAPI, Ory/`X-AI-Agent-Key` auth. (Moved out of `HubspotApps` 2026-06-19.)
 
 ## What's LEFT
 
-1. **Phase 3 — fill the mapping** (`hubspot-adapter-function/src/lib/mapping.js`): *In progress.*
+1. **Phase 3 — fill the mapping** (`Prypco/hubspot-adapter` → `src/lib/mapping.ts`): *In progress.*
    Done 2026-06-17 from live schema + Miro/Figma: application type id `2-203889439`, property
    `2-203890683`; contact/deal/application/property field maps (deal+contact expanded from the
    Affordability/Additional-Questions screens, flagged provisional). **Blocked:** lead (needs
@@ -55,8 +56,8 @@ instamortgage / portal (C#)  ──Azure Service Bus──►  HubSpotConsumer (
 3. **Build/run the .NET side:** GitHub Packages PAT (`read:packages`, SSO for Prypco) → `dotnet
    restore`; create local Postgres `hubspot_sync`; `dotnet ef migrations add InitialOutbox` +
    `database update`; run with `ASPNETCORE_ENVIRONMENT=local`.
-4. **Provision Azure** per `hubspot-adapter-function/SETUP.md` (Function App, Entra Easy Auth,
-   MI app-role, Key Vault `HUBSPOT_TOKEN`, networking, `hubspot-sync` queue).
+4. **Provision infra** per `Prypco/hubspot-adapter` `SETUP.md` (container image + k8s deploy,
+   `HUBSPOT_TOKEN` + `X_AI_AGENT_KEY` secrets, `USER_SERVICE_BASE_URL`) and the `hubspot-sync` Service Bus queue.
 5. **Push branches + open PRs** (currently local only).
 
 ## Confirm HubSpotDev MCP before Phase 3
