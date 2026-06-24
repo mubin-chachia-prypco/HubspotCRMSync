@@ -49,5 +49,16 @@ namespace Infrastructure.Services
             _logger.LogError("HubSpot adapter call failed {Status}: {Body}", (int)response.StatusCode, body);
             return false;
         }
+
+        public async Task<string> GetEnumsAsync(CancellationToken cancellationToken)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, _settings.AdapterEnumsUrl);
+            if (!string.IsNullOrWhiteSpace(_settings.AdapterServiceToken))
+                request.Headers.Add(ServiceTokenHeader, _settings.AdapterServiceToken);
+
+            using var response = await _http.SendAsync(request, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadAsStringAsync(cancellationToken);
+        }
     }
 }

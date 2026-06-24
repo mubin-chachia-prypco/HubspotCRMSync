@@ -24,7 +24,7 @@ namespace Domain.Entities.InboundLeads
 
         public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 
-        /// <summary>One-time token TTL (~60s). Redeem fails once past this.</summary>
+        /// <summary>One-time token TTL (~5 min). Redeem fails once past this.</summary>
         public DateTimeOffset ExpiresAt { get; set; }
 
         /// <summary>Set on first successful redeem. Non-null ⇒ already consumed (one-time).</summary>

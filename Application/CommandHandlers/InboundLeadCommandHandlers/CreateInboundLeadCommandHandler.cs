@@ -7,8 +7,10 @@ namespace Application.CommandHandlers.InboundLeadCommandHandlers
 {
     public class CreateInboundLeadCommandHandler : IRequestHandler<CreateInboundLeadCommand, Guid>
     {
-        // Short-lived prefill handoff — the token is one-time and expires quickly (spec §15).
-        private static readonly TimeSpan TokenTtl = TimeSpan.FromSeconds(60);
+        // Short-lived prefill handoff — the token is one-time and expires quickly (spec §15). 5 min
+        // gives the partner redirect + browser load + FE redeem room on slow mobile connections, while
+        // staying brief (one-time + non-enumerable already carry the security).
+        private static readonly TimeSpan TokenTtl = TimeSpan.FromMinutes(5);
 
         private readonly IInboundLeadRepository _leads;
         private readonly ILogger<CreateInboundLeadCommandHandler> _logger;

@@ -1,8 +1,8 @@
 # Running the producer locally (HubspotCRMSync)
 
-The CRM-agnostic **.NET producer**: `/ingest` envelope ingress, partner lead intake (`/intake/dubizzle`,
+The CRM-agnostic **.NET producer**: `/ingest` envelope ingress, partner lead intake (`/intake/{source}`,
 spec §15), transactional outbox, and (in non-local envs) the Service Bus consumer that calls the
-Azure Function adapter. **No HubSpot code lives here.** Full design: [`docs/forwarder-adapter-spec.md`](docs/forwarder-adapter-spec.md).
+adapter. **No HubSpot code lives here.** Full design: [`docs/forwarder-adapter-spec.md`](docs/forwarder-adapter-spec.md).
 
 ## Prerequisites
 - **.NET 8 SDK** (`dotnet --version` → 8.x).
@@ -54,18 +54,18 @@ In VS Code: **Run → "Run producer (local)"**.
 |---|---|---|
 | GET | `/health` | liveness |
 | POST | `/ingest` | CRM-sync envelope → outbox → (non-local) Service Bus → adapter |
-| POST | `/intake/dubizzle` | partner lead intake; stores raw payload, returns `{ token }` (UUIDv7) |
-| GET | `/intake/dubizzle/{token}` | redeem token → stored payload (one-time, 60s TTL; else `410`) |
+| POST | `/intake/{source}` | partner lead intake (`source` ∈ {dubizzle, bayut}); stores raw payload, returns `{ token }` (UUIDv7) |
+| GET | `/intake/redeem/{token}` | redeem token → stored payload (one-time, 5 min TTL; else `410`) |
 
 ### Try the intake flow (no HubSpot / queue needed)
 ```bash
 # store a lead → get a token
-TOKEN=$(curl -s -X POST localhost:5080/intake/dubizzle \
+TOKEN=$(curl -s -X POST localhost:5080/intake/bayut \
   -H 'content-type: application/json' \
   -d '{"name":"Jane","phone":"+9715...","listingId":"BAYUT-123"}' | jq -r .token)
 
-# redeem it (works once, within 60s) → returns the stored payload verbatim
-curl -i localhost:5080/intake/dubizzle/$TOKEN
+# redeem it (works once, within 5 min) → returns the stored payload verbatim
+curl -i localhost:5080/intake/redeem/$TOKEN
 # redeem again → 410 Gone
 ```
 
@@ -76,10 +76,10 @@ curl -i localhost:5080/intake/dubizzle/$TOKEN
 | `ServiceBusSettings:ConnectionString` | Azure Service Bus | placeholder; only used by the consumer (non-local) |
 | `HubSpotSyncSettings:AdapterIngestUrl` | adapter API URL (k8s service, path `/api/ingest`) | placeholder; cloud only |
 | `HubSpotSyncSettings:AdapterServiceToken` | service token sent as `X-AI-Agent-Key` to the adapter | empty locally; secret in prod |
-| `Intake:Dubizzle:BearerToken` | Bearer token for `POST /intake/dubizzle` | **empty = no auth** (set to require `Authorization: Bearer …`) |
+| `Intake:{Source}:BearerToken` | per-partner Bearer token for `POST /intake/{source}` (e.g. `Intake:Dubizzle:BearerToken`, `Intake:Bayut:BearerToken`) | **empty = no auth** (set to require `Authorization: Bearer …`) |
 
 ## Notes / not-yet
 - **Service Bus + the adapter call are cloud-path** — locally the consumer is off. End-to-end
   (producer→queue→Function→HubSpot) needs Azure provisioning (see the adapter's `SETUP.md`).
-- Inbound POST **auth is optional/off by default** — a static **Bearer token** (`Authorization:
-  Bearer …`) checked only when `Intake:Dubizzle:BearerToken` is set (Key Vault in prod).
+- Inbound POST **auth is optional/off by default** — a per-partner static **Bearer token**
+  (`Authorization: Bearer …`) checked only when `Intake:{Source}:BearerToken` is set (Key Vault in prod).

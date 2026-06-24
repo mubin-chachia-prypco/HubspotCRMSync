@@ -320,9 +320,9 @@ this is the screen→object routing:
   `wrangler dev` locally. Add `crm.objects.notes.write` to SyncApp + reinstall.
 - **Phase 2 — Forwarder rewrite.** `/ingest` envelope ingress; worker POSTs to the Worker;
   `IDeadLetterQueue`; strip HubSpot code; config; update README/docs.
-- **Phase 2.5 — Dubizzle lead intake (§15).** `inbound_leads` table (UUIDv7 PK-as-token, jsonb
-  payload); `POST /intake/dubizzle` (store-only, returns token) + `GET /intake/dubizzle/{token}`
-  (one-time, 60s TTL → prefill). No HubSpot write on intake.
+- **Phase 2.5 — Dubizzle/Bayut lead intake (§15).** `inbound_leads` table (UUIDv7 PK-as-token, jsonb
+  payload); `POST /intake/{source}` (store-only, returns token; `source` ∈ {dubizzle, bayut}) +
+  `GET /intake/redeem/{token}` (one-time, 5 min TTL → prefill). No HubSpot write on intake.
 - **Phase 3 — Full mapping.** `mapping.js` + `resolve.js` for lead/deal/application/offer/property
   from live schema; associations; stage maps (§7/§8). *(Partial: contact/deal mapped; application &
   property type ids filled 2026-06-17; lead/offer blocked — see §7.)*
@@ -342,23 +342,24 @@ be updated to point at this forwarder + Worker-adapter split once Phase 1–2 la
 
 ## 15. Dubizzle / Bayut lead intake (top-of-funnel entry → token → prefill)
 
-**Status:** designed, not built · **Decided:** 2026-06-17 (from the Dubizzle email thread w/ Jonathon Padron)
+**Status:** built (this repo) · **Decided:** 2026-06-17, confirmed 2026-06-16 email thread w/ Jonathon
+Padron · **Updated 2026-06-24:** multi-partner endpoint (Bayut + Dubizzle) + 5 min TTL.
 
-Dubizzle is the primary top-of-funnel entry. When a user submits the Dubizzle lead form, **their
-Lambda posts the lead twice**:
+Dubizzle and Bayut (same group) are the primary top-of-funnel entries. When a user submits the partner
+lead form, **their Lambda posts the lead twice**:
 1. To **their own CRM** — which syncs to our HubSpot via the existing CRM integration (this is where
    their dedup / sync-error retention lives). *Not our concern here.*
-2. **Directly to us** — we store it and return a **one-time token**. Dubizzle redirects the user to a
+2. **Directly to us** — we store it and return a **one-time token**. The partner redirects the user to a
    PRYPCO URL with that token in the query string; our FE redeems it to **prefill the affordability
    calculator**.
 
 ```
-  Dubizzle form ─► Dubizzle Lambda ─┬─► Dubizzle CRM ─► (existing) ─► our HubSpot
-                                    │
-                                    └─► POST /intake/dubizzle ─► inbound_leads (store only)
-                                            ◄── { token = UUIDv7 } ──┘
+  partner form ─► partner Lambda ─┬─► partner CRM ─► (existing) ─► our HubSpot
+                                  │
+                                  └─► POST /intake/{source} ─► inbound_leads (store only)
+                                          ◄── { token = UUIDv7 } ──┘
   User ─► redirect to prypco.com/...?token=<uuidv7>
-  FE   ─► GET /intake/dubizzle/{token} ─► payload ─► prefill calculator (token burned, 60s TTL)
+  FE   ─► GET /intake/redeem/{token} ─► payload ─► prefill calculator (token burned, 5 min TTL)
 ```
 
 ### Decisions (locked)
@@ -374,42 +375,70 @@ Lambda posts the lead twice**:
   click-through; auto-pushing all of them to HubSpot would pollute the funnel. The HubSpot Lead/Deal
   is created later via the normal envelope → adapter path **when the user actually engages** with the
   calculator. (The HubSpot copy for non-engaging leads still arrives via path #1, Dubizzle's CRM.)
-- **One-time + ~60s TTL.** Redeem returns the payload iff `expires_at > now() AND consumed_at IS NULL`,
+- **One-time + ~5 min TTL.** Redeem returns the payload iff `expires_at > now() AND consumed_at IS NULL`,
   then stamps `consumed_at`; otherwise `410 Gone`. Matches Jonathon's "on failure, error out and let
-  the user fill the next page manually" — no elaborate resend. A Dubizzle resend just inserts a new
-  row with a fresh token; dedup is Dubizzle's CRM responsibility, not ours.
+  the user fill the next page manually" — no elaborate resend. A partner resend just inserts a new
+  row with a fresh token; dedup is the partner CRM's responsibility, not ours. (TTL was 60s in the
+  original design; raised to 5 min on 2026-06-24 so the redirect + browser load + FE redeem survive a
+  slow mobile connection — the one-time + non-enumerable token already carry the security.)
+- **One endpoint, multiple partners.** `POST /intake/{source}` with `source` ∈ {`dubizzle`, `bayut`}
+  (allow-list; unknown → `404`). Each partner authenticates with its **own** bearer token
+  (`Intake:{Source}:BearerToken`) so a leak of one can't post as the other. `source` is stored on the
+  row for attribution.
 
 ### Table (`inbound_leads`) — new EF entity + config alongside the outbox
 | column | type | notes |
 |---|---|---|
 | `id` | `uuid` (v7) | PK; also the URL token |
-| `source` | `text` | `'dubizzle'` (room for `'bayut'`, etc.) |
+| `source` | `text` | `'dubizzle'` \| `'bayut'` (allow-list) |
 | `payload` | `jsonb` | raw lead as received; schema-flexible |
 | `created_at` | `timestamptz` | |
-| `expires_at` | `timestamptz` | `created_at + ~60s` |
+| `expires_at` | `timestamptz` | `created_at + ~5 min` |
 | `consumed_at` | `timestamptz?` | set on first successful redeem (one-time) |
 
-### Endpoints (on the .NET producer, mirroring the `/ingest` minimal-API style)
-- `POST /intake/dubizzle` — Dubizzle Lambda → us. Insert row, return `{ token }`. **Auth: a static
-  Bearer token** Dubizzle sends in the `Authorization: Bearer …` header, held in our secrets (Key
-  Vault in prod). Validated only when configured (`Intake:Dubizzle:BearerToken`), so local dev needs
-  none. **Decided 2026-06-17 — bearer token, not HMAC.**
-- `GET /intake/dubizzle/{token}` — FE → us. Returns the stored payload (or `410`); burns the token.
-  Gated by the token itself (FE is unauthenticated at landing); consider returning only the
-  prefill-relevant fields.
+### Endpoints (on the .NET producer)
+- `POST /intake/{source}` — partner Lambda → us (`source` ∈ {`dubizzle`, `bayut`}; unknown → `404`).
+  Insert row, return `{ token }`. **Auth: a per-partner static Bearer token** the partner sends in the
+  `Authorization: Bearer …` header, held in our secrets (Key Vault in prod). Validated only when
+  configured (`Intake:{Source}:BearerToken`, e.g. `Intake:Dubizzle:BearerToken`,
+  `Intake:Bayut:BearerToken`), so local dev needs none. **Decided 2026-06-17 — bearer token, not HMAC.**
+- `GET /intake/redeem/{token}` — FE → us. Source-agnostic (the UUIDv7 token is globally unique and the
+  FE only carries the token). Returns the stored payload (or `410`); burns the token. Gated by the
+  token itself (FE is unauthenticated at landing); consider returning only the prefill-relevant fields.
 
 ### Link to external id (see §16)
 The intake token is **per-visit and ephemeral** — a returning customer gets a *new* `inbound_leads.id`
 each time, so it is NOT the durable identity. When the user engages, the first real upsert resolves the
-Contact via the identity chain (§16) and carries our own stable portal id; Dubizzle's lead reference is
-stored as `partner_lead_ref` (identity key + attribution, never the token).
+Contact via the identity chain (§16) and carries our own stable portal id; the partner's lead reference
+is stored as `partner_lead_ref` (identity key + attribution, never the token).
+
+### Dedup contract — no duplicate Contact across the two paths (the §16 chain handles it)
+The same person reaches our HubSpot by **both** paths above: directly (token → engage → envelope) and
+via the partner CRM → our HubSpot. They collapse to **one** Contact because the adapter's `resolve.js`
+runs the chain `partner_lead_ref` → `email` → `phone` on first upsert. `email` is the only **unique**
+HubSpot Contact property, so even if the ref doesn't line up, the email match (and a 409-as-success on
+concurrent create) prevents a duplicate. The ref is the **safety net for when email diverges** (e.g.
+the user edits their email during our funnel after prefill). For that net to exist, three assumptions
+must hold — **confirm with the partner + CRM-migration owner (Rey Balating), not solvable in this repo:**
+1. The partner's **direct `/intake` payload includes their lead/CRM identifier** (the value we store as
+   `partner_lead_ref` when the user engages). *(This is the one field we actually need from their payload
+   — everything else stays opaque.)*
+2. The partner's **CRM→CRM sync writes that *same* identifier into the HubSpot `partner_lead_ref`
+   property** on the Contact it creates. If it writes it elsewhere/nowhere, the ref match silently always
+   misses and we rely 100% on email.
+3. The **FE carries the ref forward into the envelope** when the user engages, so `resolve.js` can match
+   on it. (`partner_lead_ref` is **not** a unique HubSpot property → it is *email*, not the ref, that
+   gives race-safety on concurrent create.)
 
 ### Open items
-1. **Inbound Bearer token value + rotation** — agree the token string with Dubizzle and store it in
-   our Key Vault (`Intake:Dubizzle:BearerToken`). *(The only thing we need from them — not their payload shape.)*
+1. **Per-partner inbound Bearer token value + rotation** — agree the token string with each partner and
+   store in our Key Vault (`Intake:Dubizzle:BearerToken`, `Intake:Bayut:BearerToken`).
+2. **Identifier alignment (dedup contract above)** — confirm with Rey Balating / the partner that the
+   identifier in the `/intake` payload is the same value their CRM writes into HubSpot `partner_lead_ref`.
 
-> Dubizzle's payload schema and which fields prefill the calculator are **FE concerns, not ours** —
-> our side stores/returns the blob opaquely. No action needed here.
+> The partner's payload schema and which fields prefill the calculator are **FE concerns, not ours** —
+> our side stores/returns the blob opaquely. The **one** exception is the lead identifier (above), which
+> we need present so dedup's safety net works.
 
 ---
 

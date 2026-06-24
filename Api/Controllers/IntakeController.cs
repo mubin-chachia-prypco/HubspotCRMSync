@@ -16,6 +16,14 @@ namespace Api.Controllers
     [ApiController]
     public class IntakeController : ControllerBase
     {
+        // Partners allowed to post leads. Both Dubizzle and Bayut (same group) call the same endpoint;
+        // each authenticates with its own bearer token (Intake:{Source}:BearerToken).
+        private static readonly HashSet<string> AllowedSources = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "dubizzle",
+            "bayut",
+        };
+
         private readonly IMediator _mediator;
         private readonly IConfiguration _config;
         private readonly ILogger<IntakeController> _logger;
@@ -27,17 +35,22 @@ namespace Api.Controllers
             _logger = logger;
         }
 
-        [HttpPost("/intake/dubizzle")]
-        public async Task<IActionResult> Create(CancellationToken ct)
+        [HttpPost("/intake/{source}")]
+        public async Task<IActionResult> Create(string source, CancellationToken ct)
         {
+            source = source.ToLowerInvariant();
+            if (!AllowedSources.Contains(source))
+                return NotFound(new { error = $"unknown intake source '{source}'" });
+
             using var reader = new StreamReader(Request.Body, Encoding.UTF8);
             var raw = await reader.ReadToEndAsync(ct);
             if (string.IsNullOrWhiteSpace(raw))
                 return BadRequest(new { error = "empty body" });
 
-            // Auth: a static Bearer token Dubizzle sends in the Authorization header, held in our secrets
-            // (Key Vault in prod). Enforced only when configured, so local dev needs none.
-            var bearer = _config["Intake:Dubizzle:BearerToken"];
+            // Auth: a per-partner static Bearer token the partner sends in the Authorization header,
+            // held in our secrets (Key Vault in prod). Enforced only when configured, so local dev
+            // needs none. IConfiguration lookup is case-insensitive (e.g. Intake:Dubizzle:BearerToken).
+            var bearer = _config[$"Intake:{source}:BearerToken"];
             if (!string.IsNullOrEmpty(bearer) && !IsValidBearer(Request, bearer))
                 return Unauthorized();
 
@@ -45,12 +58,14 @@ namespace Api.Controllers
             try { using var _ = JsonDocument.Parse(raw); }
             catch (JsonException) { return BadRequest(new { error = "payload must be valid JSON" }); }
 
-            var token = await _mediator.Send(new CreateInboundLeadCommand { Source = "dubizzle", PayloadJson = raw }, ct);
+            var token = await _mediator.Send(new CreateInboundLeadCommand { Source = source, PayloadJson = raw }, ct);
             return Ok(new { token });
         }
 
-        // FE redeems the token on the PRYPCO landing page. One-time + TTL: 410 if unknown/expired/consumed.
-        [HttpGet("/intake/dubizzle/{token:guid}")]
+        // FE redeems the token on the PRYPCO landing page. Source-agnostic: the token (UUIDv7) is
+        // globally unique, and the FE only ever carries the token. One-time + TTL: 410 if
+        // unknown/expired/consumed.
+        [HttpGet("/intake/redeem/{token:guid}")]
         public async Task<IActionResult> Redeem(Guid token, CancellationToken ct)
         {
             var lead = await _mediator.Send(new RedeemInboundLeadQuery { Token = token }, ct);

@@ -16,6 +16,12 @@ namespace Application.Options
         public string AdapterIngestUrl { get; set; } = string.Empty;
 
         /// <summary>
+        /// Adapter's generic enum-vocabulary endpoint (CRM-agnostic), e.g. http://hubspot-adapter/enums.
+        /// Proxied to the FE via this service's GET /enums so the FE never talks to the adapter directly.
+        /// </summary>
+        public string AdapterEnumsUrl { get; set; } = string.Empty;
+
+        /// <summary>
         /// Service token presented to the adapter as the <c>X-AI-Agent-Key</c> header. Held in a
         /// secret (Key Vault) in prod. Empty disables the auth header (e.g. local dev).
         /// </summary>
